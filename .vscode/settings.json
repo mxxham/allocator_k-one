@@ -1,0 +1,5 @@
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "files.eol": "\n",
+  "search.exclude": { "**/node_modules": true, "**/out": true, "**/web/bundle.js": true }
+}

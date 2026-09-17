@@ -1,0 +1,32 @@
+{
+  "name": "fefo-allocator",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "FEFO allocation, wave-grouped picklists, pickface replenishment, and movement audit reporting for CKB warehouse",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "allocate": "tsx src/cli.ts \"data/Warehouse_Management_System_15_September_2026_.xlsx\" --out out --as-of 2026-09-15",
+    "start": "tsx src/cli.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "build:web": "esbuild src/web/main.ts --bundle --format=iife --target=es2020 --minify --outfile=web/bundle.js",
+    "web": "npm run build:web && npx --yes serve web -l 5173"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "fflate": "^0.8.3",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

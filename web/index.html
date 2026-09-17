@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FEFO Allocator — CKB Warehouse</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>">
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#f0f1f4; --line:#dde0e5;
+    --ink:#1a1d23; --ink-dim:#5f6775; --ink-faint:#8b919c;
+    --amber:#d97706; --amber-ink:#ffffff;
+    --ok:#16a34a; --warn:#ca8a04; --bad:#dc2626;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
+    --radius: 4px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
+  body{padding:0 0 4rem;}
+  a{color:inherit;}
+
+  header.top{
+    display:flex;align-items:baseline;gap:.9rem;padding:1.4rem 2rem 1.1rem;
+    border-bottom:1px solid var(--line);background:var(--panel);
+  }
+  header.top h1{font-size:1.15rem;font-weight:650;margin:0;letter-spacing:.01em;}
+  header.top .rule{color:var(--ink-faint);}
+  header.top .sub{color:var(--ink-dim);font-size:.86rem;}
+
+  main{max-width:1180px;margin:0 auto;padding:1.6rem 2rem 0;}
+
+  .setup{
+    display:grid;grid-template-columns:1.3fr 1fr;gap:1.1rem;margin-bottom:1.6rem;
+  }
+  @media (max-width:880px){ .setup{grid-template-columns:1fr;} }
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.1rem 1.2rem;}
+  .card h2{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);
+    margin:0 0 .8rem;font-weight:650;}
+
+  #dropzone{
+    border:1.5px dashed var(--line);border-radius:var(--radius);padding:1.6rem 1.2rem;
+    text-align:center;cursor:pointer;transition:border-color .15s, background .15s;
+  }
+  #dropzone:hover, #dropzone.drag{border-color:var(--amber);background:#fef7e8;}
+  #dropzone .icon{font-size:1.6rem;display:block;margin-bottom:.4rem;opacity:.8;}
+  #dropzone .primary{font-size:.92rem;}
+  #dropzone .secondary{font-size:.78rem;color:var(--ink-faint);margin-top:.25rem;}
+  #fileLabel{font-family:var(--mono);color:var(--amber);}
+
+  .status-line{margin-top:.7rem;font-size:.82rem;color:var(--ink-dim);min-height:1.1em;}
+  .status-line[data-kind="ok"]{color:var(--ok);}
+  .status-line[data-kind="error"]{color:var(--bad);}
+  .status-line[data-kind="busy"]{color:var(--amber);}
+
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:.7rem 1rem;}
+  .opts label{display:flex;flex-direction:column;gap:.3rem;font-size:.78rem;color:var(--ink-dim);}
+  .opts input[type="date"], .opts input[type="number"], .opts select{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    padding:.42rem .5rem;border-radius:var(--radius);font-family:var(--mono);font-size:.85rem;
+  }
+  .opts .check{flex-direction:row;align-items:center;gap:.5rem;font-size:.8rem;}
+  .opts .check input{width:15px;height:15px;}
+  .opts .full{grid-column:1 / -1;}
+
+  button{
+    font-family:var(--sans);border:none;border-radius:var(--radius);cursor:pointer;
+    font-size:.86rem;font-weight:600;
+  }
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  #runBtn{
+    background:var(--amber);color:var(--amber-ink);padding:.6rem 1.1rem;margin-top:.9rem;width:100%;
+  }
+  #runBtn:hover:not(:disabled){filter:brightness(1.08);}
+
+  .dl-row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.9rem;}
+  .dl-row button{
+    background:var(--panel-2);color:var(--ink);border:1px solid var(--line);padding:.5rem .8rem;
+  }
+  .dl-row button:hover:not(:disabled){border-color:var(--amber);color:var(--amber);}
+  .dl-row button.primary-dl{background:var(--amber);color:var(--amber-ink);border-color:var(--amber);}
+  .dl-row button.primary-dl:hover:not(:disabled){filter:brightness(1.08);}
+
+  #results[hidden]{display:none;}
+
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:.8rem;margin-bottom:1.4rem;}
+  @media (max-width:880px){ .kpis{grid-template-columns:repeat(2,1fr);} }
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:.85rem 1rem;}
+  .kpi-label{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);}
+  .kpi-value{display:block;font-family:var(--mono);font-size:1.5rem;margin:.2rem 0 .1rem;color:var(--amber);}
+  .kpi-sub{display:block;font-size:.74rem;color:var(--ink-dim);}
+
+  #tabs{display:flex;gap:.2rem;border-bottom:1px solid var(--line);margin-bottom:1.1rem;overflow-x:auto;}
+  #tabs button{
+    background:transparent;color:var(--ink-dim);padding:.6rem 1rem;border-radius:0;
+    border-bottom:2px solid transparent;white-space:nowrap;
+  }
+  #tabs button.active{color:var(--ink);border-bottom-color:var(--amber);}
+  #tabs button:hover{color:var(--ink);}
+
+  .panel{display:none;}
+  .panel.visible{display:block;}
+
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);}
+  table{border-collapse:collapse;width:100%;font-size:.82rem;}
+  th,td{padding:.45rem .6rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{background:var(--panel-2);color:var(--ink-dim);font-weight:600;font-size:.7rem;
+    text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;}
+  td{font-family:var(--mono);color:var(--ink);}
+  tr:hover td{background:#f5f6f8;}
+  .empty{color:var(--ink-faint);font-size:.86rem;padding:1rem 0;}
+
+  .flag{color:var(--bad);font-family:var(--sans);font-weight:600;font-size:.72rem;}
+  .tag{font-family:var(--sans);font-size:.68rem;font-weight:700;padding:.12rem .4rem;border-radius:2px;}
+  .tag-pick{background:#dcfce7;color:var(--ok);}
+  .tag-replen{background:#dbeafe;color:#2563eb;}
+  .tag-info{background:#e8eaed;color:var(--ink-dim);}
+  .tag-warn{background:#fef9c3;color:var(--warn);}
+  .tag-error{background:#fee2e2;color:var(--bad);}
+
+  .pl-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    margin-bottom:.7rem;padding:.2rem .9rem .8rem;}
+  .pl-card summary{cursor:pointer;padding:.7rem 0;list-style:none;display:flex;gap:.8rem;align-items:baseline;flex-wrap:wrap;}
+  .pl-card summary::-webkit-details-marker{display:none;}
+  .pl-id{font-family:var(--mono);color:var(--amber);font-weight:600;}
+  .pl-meta{color:var(--ink-dim);font-size:.82rem;}
+
+  #pickfaceSearch{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    padding:.42rem .6rem;border-radius:var(--radius);font-size:.82rem;width:220px;margin-bottom:.7rem;
+  }
+
+  footer{max-width:1180px;margin:2.4rem auto 0;padding:1rem 2rem;color:var(--ink-faint);font-size:.76rem;border-top:1px solid var(--line);}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>FEFO Allocator</h1>
+  <span class="rule">·</span>
+  <span class="sub">Picklists, pickface replenishment &amp; movement audit for CKB Logistics</span>
+</header>
+
+<main>
+  <section class="setup">
+    <div class="card">
+      <h2>Workbook</h2>
+      <div id="dropzone">
+        <span class="icon">⇩</span>
+        <div class="primary">Drop the daily WMS workbook here, or click to browse</div>
+        <div class="secondary" id="fileLabel">No file loaded — nothing leaves this browser tab</div>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xlsm" hidden />
+      <div class="status-line" id="status" data-kind="idle">Waiting for a workbook.</div>
+      <button id="runBtn" disabled>Run allocation</button>
+    </div>
+
+    <div class="card">
+      <h2>Rules</h2>
+      <div class="opts">
+        <label>As-of date
+          <input type="date" id="asOf" />
+        </label>
+        <label>Min. shelf life (days)
+          <input type="number" id="minShelfLife" value="180" min="0" />
+        </label>
+        <label>Pickface target
+          <select id="targetQty">
+            <option value="upp" selected>One full pallet (UPP)</option>
+            <option value="1">1 carton</option>
+            <option value="12">12 cartons</option>
+            <option value="24">24 cartons</option>
+            <option value="48">48 cartons</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="coverPending" checked /> Replenish enough to cover today's orders</label>
+        <label class="check full"><input type="checkbox" id="splitTasks" checked /> Separate forklift (pallet) and handpick (case) sheets</label>
+      </div>
+      <div class="dl-row">
+        <button id="downloadXlsx" disabled>Picklist workbook (.xlsx)</button>
+        <button id="downloadHtml" disabled>Picklist (.pdf)</button>
+        <button id="downloadCsv" disabled>Movement report (.csv)</button>
+        <button id="downloadAll" disabled class="primary-dl">Download all (.zip)</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="results" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div id="tabs">
+      <button data-panel="panel-picklist" class="active">Picklist</button>
+      <button data-panel="panel-replenishment">Replenishment</button>
+      <button data-panel="panel-movement">Movement report</button>
+      <button data-panel="panel-shortage">Shortage</button>
+      <button data-panel="panel-exceptions">Exceptions</button>
+      <button data-panel="panel-pickface">Pickfaces</button>
+    </div>
+
+    <div id="panels">
+      <div class="panel" id="panel-pickface">
+        <input type="text" id="pickfaceSearch" placeholder="Filter by SKU or description…" />
+        <div id="pickfaceTable"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Runs entirely in this browser tab — the workbook is never uploaded anywhere. Same FEFO engine as the CLI:
+  earliest expiry first, sealed pallets before opened ones are broken, best-fit on the loose remainder.
+  Bin-to-bin replenishment draws stock the exact same way as outbound picking.
+</footer>
+
+<script src="./bundle.js"></script>
+</body>
+</html>
