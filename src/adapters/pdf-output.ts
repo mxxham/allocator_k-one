@@ -51,13 +51,14 @@ function wrapText(doc: jsPDF, text: string, width: number): string[] {
   return doc.splitTextToSize(text, width);
 }
 
-function drawPageNumber(doc: jsPDF, geo: PageGeometry): void {
+export function stampPageNumbers(doc: jsPDF): void {
+  const geo = getPageGeometry(doc);
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Page ${i} of ${pageCount}`, geo.pageWidth - geo.marginRight, geo.pageHeight - 4, { align: 'right' });
+    doc.text(`Page ${i} of ${pageCount}`, geo.pageWidth - geo.marginRight, geo.pageHeight - geo.marginBottom + 2, { align: 'right' });
   }
 }
 
@@ -216,9 +217,6 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
   doc.line(geo.marginLeft, footY + 22, 70, footY + 22);
   doc.line(90, footY + 22, 146, footY + 22);
   doc.line(160, footY + 22, 216, footY + 22);
-
-  // Page numbers
-  drawPageNumber(doc, geo);
 }
 
 // ── Replenishment PDF rendering ─────────────────────────────────────────────
@@ -317,9 +315,6 @@ export function renderReplenPdfPage(doc: jsPDF, replenishment: ReplenishmentResu
       }
     },
   });
-
-  // Page numbers
-  drawPageNumber(doc, geo);
 }
 
 // ── Generate all picklist PDFs ──────────────────────────────────────────────
@@ -336,6 +331,7 @@ export function generatePicklistPdfs(
   for (const pl of result.picklists) {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     renderPicklistPdfPage(doc, pl, pickfaces);
+    stampPageNumbers(doc);
     const data = new Uint8Array(doc.output('arraybuffer'));
     const name = `picklist_${pl.picklistId}.pdf`;
     pdfs.push({ name, data });
@@ -344,6 +340,7 @@ export function generatePicklistPdfs(
   if (replenishment && replenishment.tasks.length > 0) {
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     renderReplenPdfPage(doc, replenishment, cfg);
+    stampPageNumbers(doc);
     const data = new Uint8Array(doc.output('arraybuffer'));
     pdfs.push({ name: 'replenishment.pdf', data });
   }

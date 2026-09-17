@@ -5,7 +5,7 @@ import { allocate } from '../allocator.js';
 import { applyMovements } from '../binselect.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import { renderPicklistHtml } from '../adapters/html-output.js';
-import { renderPicklistPdfPage, renderReplenPdfPage } from '../adapters/pdf-output.js';
+import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
 import { buildPicklists, uomLabel } from '../picklist.js';
@@ -383,6 +383,7 @@ el.downloadHtml.addEventListener('click', () => {
     doc.addPage();
     renderReplenPdfPage(doc, replenishment, config ?? withConfig());
   }
+  stampPageNumbers(doc);
   const blob = doc.output('blob');
   triggerDownload(blob, outName('pdf'));
 });
@@ -408,6 +409,7 @@ el.downloadAll.addEventListener('click', () => {
     doc.addPage();
     renderReplenPdfPage(doc, replenishment, config ?? withConfig());
   }
+  stampPageNumbers(doc);
   const pdfBytes = new Uint8Array(doc.output('arraybuffer'));
 
   const files: Record<string, Uint8Array> = {
