@@ -51,14 +51,34 @@ function wrapText(doc: jsPDF, text: string, width: number): string[] {
   return doc.splitTextToSize(text, width);
 }
 
-export function stampPageNumbers(doc: jsPDF): void {
+export type PdfPageRange = {
+  startPage: number;
+  endPage: number;
+};
+
+export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void {
   const geo = getPageGeometry(doc);
-  const pageCount = doc.getNumberOfPages();
-  for (let i = 1; i <= pageCount; i++) {
-    doc.setPage(i);
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Page ${i} of ${pageCount}`, geo.pageWidth - geo.marginRight, geo.pageHeight - geo.marginBottom + 2, { align: 'right' });
+
+  if (pageRanges) {
+    // Per-picklist numbering: each picklist's pages are numbered independently
+    for (const range of pageRanges) {
+      const picklistPageCount = range.endPage - range.startPage + 1;
+      for (let p = 0; p < picklistPageCount; p++) {
+        doc.setPage(range.startPage + p);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Page ${p + 1} of ${picklistPageCount}`, geo.pageWidth - geo.marginRight, geo.pageHeight - 5, { align: 'right' });
+      }
+    }
+  } else {
+    // Fallback: global numbering (used by generatePicklistPdfs which creates one doc per picklist)
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Page ${i} of ${pageCount}`, geo.pageWidth - geo.marginRight, geo.pageHeight - 5, { align: 'right' });
+    }
   }
 }
 

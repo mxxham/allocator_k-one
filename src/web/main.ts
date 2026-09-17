@@ -5,7 +5,7 @@ import { allocate } from '../allocator.js';
 import { applyMovements } from '../binselect.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import { renderPicklistHtml } from '../adapters/html-output.js';
-import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers } from '../adapters/pdf-output.js';
+import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
 import { buildPicklists, uomLabel } from '../picklist.js';
@@ -375,15 +375,19 @@ el.downloadXlsx.addEventListener('click', () => {
 el.downloadHtml.addEventListener('click', () => {
   if (!allocation) return;
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageRanges: PdfPageRange[] = [];
   for (let i = 0; i < allocation.picklists.length; i++) {
     if (i > 0) doc.addPage();
+    const startPage = doc.getNumberOfPages();
     renderPicklistPdfPage(doc, allocation.picklists[i], pickfaces);
+    const endPage = doc.getNumberOfPages();
+    pageRanges.push({ startPage, endPage });
   }
   if (replenishment && replenishment.tasks.length > 0) {
     doc.addPage();
     renderReplenPdfPage(doc, replenishment, config ?? withConfig());
   }
-  stampPageNumbers(doc);
+  stampPageNumbers(doc, pageRanges);
   const blob = doc.output('blob');
   triggerDownload(blob, outName('pdf'));
 });
@@ -401,15 +405,19 @@ el.downloadAll.addEventListener('click', () => {
   const csv = movementCsvText();
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageRanges: PdfPageRange[] = [];
   for (let i = 0; i < allocation.picklists.length; i++) {
     if (i > 0) doc.addPage();
+    const startPage = doc.getNumberOfPages();
     renderPicklistPdfPage(doc, allocation.picklists[i], pickfaces);
+    const endPage = doc.getNumberOfPages();
+    pageRanges.push({ startPage, endPage });
   }
   if (replenishment.tasks.length > 0) {
     doc.addPage();
     renderReplenPdfPage(doc, replenishment, config ?? withConfig());
   }
-  stampPageNumbers(doc);
+  stampPageNumbers(doc, pageRanges);
   const pdfBytes = new Uint8Array(doc.output('arraybuffer'));
 
   const files: Record<string, Uint8Array> = {
