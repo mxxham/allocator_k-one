@@ -1,5 +1,6 @@
 import { daysBetween, type AllocatorConfig } from './config.js';
 import { selectNextBin, toLedger, type Ledger } from './binselect.js';
+import { derivePickfaces } from './pickface.js';
 import type {
   AllocationLine,
   AllocationResult,
@@ -11,18 +12,20 @@ import type {
 } from './types.js';
 
 /**
- * FEFO allocation.
+ * FEFO allocation with pickface preference.
  *
  * Rule order, applied per demand line:
  *   1. Eligibility  — rack bin, active, not blocked, qty > 0, enough shelf life left.
- *   2. FEFO         — the earliest expiry date available is always served first.
+ *   2. Pickface first — the SKU's pickface bin is tried before any reserve bin.
+ *                       Pickers always go to the pickface, never to reserve racks.
+ *   3. FEFO         — the earliest expiry date available is always served first.
  *                     No later-expiry bin is touched while earlier stock remains.
- *   3. Within one expiry date (the tie-break layer, where handling cost lives):
+ *   4. Within one expiry date (the tie-break layer, where handling cost lives):
  *        · need >= 1 pallet  → take sealed full pallets (forklift move)
  *        · need <  1 pallet  → take from an already-open pallet, best-fit,
  *                              so a sealed pallet is only broken as a last resort
  *        · equal otherwise   → the bin closest along the pick path
- *   4. Repeat until the line is filled, or flag the balance as a shortage.
+ *   5. Repeat until the line is filled, or flag the balance as a shortage.
  *
  * The bin-choice rule itself lives in binselect.ts and is shared with
  * replenishment.ts, so a pickface top-up picks stock the exact same way an
@@ -39,6 +42,13 @@ export function allocate(
   const warnings: Warning[] = [];
   const lines: AllocationLine[] = [];
   const shortages: Shortage[] = [];
+
+  // Derive pickface assignments so outbound picks prefer the pickface bin.
+  const pickfaces = derivePickfaces(stock, config);
+  const pickfaceBySku = new Map<string, string>();
+  for (const [sku, pf] of pickfaces) {
+    pickfaceBySku.set(sku, pf.location);
+  }
 
   const bySku = new Map<string, Ledger[]>();
   const rejectedShelfLife = new Map<string, number>();
@@ -96,8 +106,52 @@ export function allocate(
     const expiriesUsed = new Set<string>();
     let allocated = 0;
 
+    // Split pool into pickface bins and reserve bins for pickface-first picking.
+    const pickfaceLoc = pickfaceBySku.get(line.sku);
+    const pickfacePool = pickfaceLoc ? pool.filter((l) => l.bin.location === pickfaceLoc) : [];
+    const reservePool = pickfaceLoc ? pool.filter((l) => l.bin.location !== pickfaceLoc) : pool;
+
+    // Phase 1: pick from the pickface bin first (picker goes to the pickface).
     while (remaining > 0) {
-      const chosen = selectNextBin(pool, remaining, upp, config);
+      const chosen = pickfacePool.length > 0
+        ? selectNextBin(pickfacePool, remaining, upp, config)
+        : undefined;
+      if (!chosen) break;
+
+      const take = Math.min(chosen.remaining, remaining);
+      const wasSealed = !chosen.opened;
+      const pickType: PickType = wasSealed && take === upp && chosen.remaining === upp ? 'PALLET' : 'CASE';
+
+      chosen.remaining -= take;
+      if (take < upp || !wasSealed) chosen.opened = true;
+      remaining -= take;
+      allocated += take;
+      expiriesUsed.add(chosen.bin.expiryDate.toISOString().slice(0, 10));
+
+      lines.push({
+        shipmentNumber: line.shipmentNumber,
+        waveNo: line.waveNo,
+        orderNos: line.orderNos,
+        sku: line.sku,
+        description: line.description || chosen.bin.description,
+        location: chosen.bin.location,
+        binId: chosen.bin.binId,
+        batch: chosen.bin.batch,
+        expiryDate: chosen.bin.expiryDate,
+        qtyPick: take,
+        pickType,
+        upp,
+        uom: chosen.bin.uom,
+        qtyRemainingInBin: chosen.remaining,
+        daysToExpiry: daysBetween(config.asOf, chosen.bin.expiryDate),
+        seq: 0,
+        breaksPallet: wasSealed && take < upp,
+      });
+    }
+
+    // Phase 2: fall back to reserve bins when the pickface is depleted.
+    while (remaining > 0) {
+      const chosen = selectNextBin(reservePool, remaining, upp, config);
       if (!chosen) break;
 
       const take = Math.min(chosen.remaining, remaining);
