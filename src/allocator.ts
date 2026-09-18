@@ -5,6 +5,7 @@ import type {
   AllocationLine,
   AllocationResult,
   DemandLine,
+  PickfaceAssignment,
   PickType,
   Shortage,
   StockBin,
@@ -237,4 +238,78 @@ export function allocate(
       shipments: new Set(demand.map((d) => d.shipmentNumber)).size,
     },
   };
+}
+
+function waveSortKey(waveNo: string): number {
+  const n = Number(waveNo);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Re-anchor pallet-break / relocation-to-pickface events to picklist/wave
+ * number order.
+ *
+ * When a bulk bin (Level B-E) is split across multiple waves, the first
+ * wave (by picklist number) "owns" the break event and shows the original
+ * bulk bin.  Subsequent waves show the pickface bin (since by wave order,
+ * the stock has already been relocated there).
+ *
+ * Only presentation changes: location, breaksPallet flag, and
+ * qtyRemainingInBin sequencing.  Allocation quantities and source bins
+ * are untouched.
+ */
+export function relocateByWaveOrder(
+  lines: AllocationLine[],
+  pickfaces: Map<string, PickfaceAssignment>,
+  config: AllocatorConfig,
+): void {
+  if (config.relocationOrderBasis !== 'picklistNumber') return;
+
+  const allocOrder = new Map<AllocationLine, number>();
+  for (let i = 0; i < lines.length; i++) {
+    allocOrder.set(lines[i], i);
+  }
+
+  const byBin = new Map<string, AllocationLine[]>();
+  for (const line of lines) {
+    const group = byBin.get(line.binId);
+    if (group) group.push(line);
+    else byBin.set(line.binId, [line]);
+  }
+
+  for (const [, picks] of byBin) {
+    if (picks.length < 2) continue;
+
+    const sku = picks[0].sku;
+    const pf = pickfaces.get(sku);
+    if (!pf) continue;
+
+    const hasBreak = picks.some((p) => p.breaksPallet);
+
+    const waveSorted = [...picks].sort(
+      (a, b) => waveSortKey(a.waveNo) - waveSortKey(b.waveNo),
+    );
+
+    const allocSorted = [...picks].sort(
+      (a, b) => (allocOrder.get(a) ?? 0) - (allocOrder.get(b) ?? 0),
+    );
+    const totalPicked = allocSorted.reduce((s, p) => s + p.qtyPick, 0);
+    const finalRemaining = allocSorted[allocSorted.length - 1].qtyRemainingInBin;
+    const initial = totalPicked + finalRemaining;
+
+    let remaining = initial;
+    for (let i = 0; i < waveSorted.length; i++) {
+      const pick = waveSorted[i];
+      remaining -= pick.qtyPick;
+      pick.qtyRemainingInBin = remaining;
+
+      if (i === 0) {
+        pick.location = picks[0].location;
+        pick.breaksPallet = hasBreak;
+      } else {
+        pick.location = pf.location;
+        pick.breaksPallet = false;
+      }
+    }
+  }
 }

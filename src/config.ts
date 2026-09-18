@@ -88,6 +88,18 @@ export interface AllocatorConfig {
    * picker mid-pick.
    */
   replenishCoverPendingDemand: boolean;
+
+  // ---- Relocation event ordering -------------------------------------------
+  /**
+   * Determines the order in which pallet-break / relocation-to-pickface events
+   * are assigned when a bulk bin is split across multiple waves.
+   *
+   * - 'picklistNumber' (default): the lowest-numbered picklist/wave owns the
+   *   break event, matching the order pickers actually work in.
+   * - 'allocationOrder': the allocator's internal demand-processing order
+   *   determines which wave owns the break (legacy behaviour).
+   */
+  relocationOrderBasis: 'picklistNumber' | 'allocationOrder';
 }
 
 export const DEFAULT_CONFIG: AllocatorConfig = {
@@ -121,6 +133,8 @@ export const DEFAULT_CONFIG: AllocatorConfig = {
   pickfaceTargetQty: 'upp',
   replenishmentMinTriggerQty: 1,
   replenishCoverPendingDemand: true,
+
+  relocationOrderBasis: 'picklistNumber',
 };
 
 export function withConfig(overrides: Partial<AllocatorConfig> = {}): AllocatorConfig {

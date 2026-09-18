@@ -1,7 +1,7 @@
 import { zipSync } from 'fflate';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import { allocate } from '../allocator.js';
+import { allocate, relocateByWaveOrder } from '../allocator.js';
 import { applyMovements } from '../binselect.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import { renderPicklistHtml } from '../adapters/html-output.js';
@@ -136,15 +136,17 @@ function run(buf: ArrayBuffer): void {
   loaded = loadWorkbookFromBuffer(buf, config);
   stock = loaded.stock;
 
+  pickfaces = derivePickfaces(loaded.stock, config);
+
   allocation = allocate(loaded.stock, loaded.demand, config, loaded.stagedBySku);
   allocation.warnings.unshift(...loaded.warnings);
+  relocateByWaveOrder(allocation.lines, pickfaces, config);
   allocation.picklists = buildPicklists(allocation, loaded.demand, config);
 
   const pickedByBin = new Map<string, number>();
   for (const l of allocation.lines) pickedByBin.set(l.binId, (pickedByBin.get(l.binId) ?? 0) + l.qtyPick);
   const stockAfterPicks = applyMovements(loaded.stock, pickedByBin);
 
-  pickfaces = derivePickfaces(loaded.stock, config);
   replenishment = replenish(stockAfterPicks, pickfaces, config, loaded.demand, allocation.lines);
   replenishment.tasks = sequenceReplenishment(replenishment.tasks);
 

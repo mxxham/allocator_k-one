@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs';
-import { allocate } from './allocator.js';
+import { allocate, relocateByWaveOrder } from './allocator.js';
 import { withConfig } from './config.js';
 import { buildPicklists } from './picklist.js';
 import { derivePickfaces } from './pickface.js';
@@ -38,9 +38,12 @@ async function main(): Promise<void> {
 
   const { stock, demand, stagedBySku, warnings } = await loadWorkbook(input, config);
 
+  const pickfaces = derivePickfaces(stock, config);
+
   // 1. outbound picking
   const result = allocate(stock, demand, config, stagedBySku);
   result.warnings.unshift(...warnings);
+  relocateByWaveOrder(result.lines, pickfaces, config);
   result.picklists = buildPicklists(result, demand, config);
 
   // 2. pickface replenishment, against what's left after today's picks
@@ -48,7 +51,6 @@ async function main(): Promise<void> {
   for (const l of result.lines) pickedByBin.set(l.binId, (pickedByBin.get(l.binId) ?? 0) + l.qtyPick);
   const stockAfterPicks = applyMovements(stock, pickedByBin);
 
-  const pickfaces = derivePickfaces(stock, config);
   const replenishment = argv.includes('--no-replenish')
     ? undefined
     : replenish(stockAfterPicks, pickfaces, config, demand, result.lines);
