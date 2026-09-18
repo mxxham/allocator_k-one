@@ -38,7 +38,7 @@ export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorCon
     const location = asString(row['Lokasi']).toUpperCase();
     if (!location) continue;
 
-    const qty = asNumber(row['Qty']);
+    const qty = asNumber(row['on hand']);
     if (qty <= 0) continue;
 
     if (config.stagingLocations.some((x) => location === x.toUpperCase())) {
