@@ -32,10 +32,36 @@ export interface LoadedData {
   warnings: Warning[];
 }
 
-export async function loadWorkbook(path: string, config: AllocatorConfig): Promise<LoadedData> {
+export async function loadWorkbook(path: string, config: AllocatorConfig, uomMasterPath?: string): Promise<LoadedData> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(path);
   const warnings: Warning[] = [];
+
+  // ---- optional UOM master (from a separate Book4.xlsx / SAP export) ------
+  const uomMaster = new Map<string, string>();
+  if (uomMasterPath) {
+    try {
+      const uomWb = new ExcelJS.Workbook();
+      await uomWb.xlsx.readFile(uomMasterPath);
+      const uomWs = uomWb.getWorksheet(1);
+      if (uomWs) {
+        const headers: string[] = [];
+        uomWs.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
+          headers[col] = String(unwrap(cell.value) ?? '').trim();
+        });
+        const matCol = headers.findIndex((h) => h === 'Material');
+        const uomCol = headers.findIndex((h) => h === 'UOM');
+        if (matCol > 0 && uomCol > 0) {
+          uomWs.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+            if (rowNumber <= 1) return;
+            const mat = asSku(row.getCell(matCol).value);
+            const uom = asString(row.getCell(uomCol).value);
+            if (mat && uom) uomMaster.set(mat, uom);
+          });
+        }
+      }
+    } catch { /* non-fatal: fall back to embedded master */ }
+  }
 
   // ---- SKU master ---------------------------------------------------------
   const master = new Map<string, { description: string; upp: number; uom: string }>();
@@ -132,7 +158,7 @@ export async function loadWorkbook(path: string, config: AllocatorConfig): Promi
       grDate: asDate(row['GR date']),
       qtyCartons: qty,
       upp,
-      uom: asString(row['uom']) || master.get(sku)?.uom || null,
+      uom: uomMaster.get(sku) || asString(row['uom']) || master.get(sku)?.uom || null,
       isFullPallet: qty >= upp,
     });
   }
