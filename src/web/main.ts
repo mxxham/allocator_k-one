@@ -364,6 +364,29 @@ el.tabs.addEventListener('click', (e) => {
   panel(btn.dataset.panel!).classList.add('visible');
 });
 
+function renderCombinedPdf(
+  alloc: AllocationResult,
+  repl: ReplenishmentResult | null,
+  pf: Map<string, PickfaceAssignment>,
+  cfg: AllocatorConfig | null,
+): { doc: jsPDF; pageRanges: PdfPageRange[] } {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pageRanges: PdfPageRange[] = [];
+  for (let i = 0; i < alloc.picklists.length; i++) {
+    if (i > 0) doc.addPage();
+    const startPage = doc.getNumberOfPages();
+    renderPicklistPdfPage(doc, alloc.picklists[i], pf);
+    const endPage = doc.getNumberOfPages();
+    pageRanges.push({ startPage, endPage });
+  }
+  if (repl && repl.tasks.length > 0) {
+    doc.addPage();
+    renderReplenPdfPage(doc, repl, cfg ?? withConfig());
+  }
+  stampPageNumbers(doc, pageRanges);
+  return { doc, pageRanges };
+}
+
 // ---- downloads ----------------------------------------------------------
 
 el.downloadXlsx.addEventListener('click', () => {
@@ -374,20 +397,7 @@ el.downloadXlsx.addEventListener('click', () => {
 
 el.downloadHtml.addEventListener('click', () => {
   if (!allocation) return;
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const pageRanges: PdfPageRange[] = [];
-  for (let i = 0; i < allocation.picklists.length; i++) {
-    if (i > 0) doc.addPage();
-    const startPage = doc.getNumberOfPages();
-    renderPicklistPdfPage(doc, allocation.picklists[i], pickfaces);
-    const endPage = doc.getNumberOfPages();
-    pageRanges.push({ startPage, endPage });
-  }
-  if (replenishment && replenishment.tasks.length > 0) {
-    doc.addPage();
-    renderReplenPdfPage(doc, replenishment, config ?? withConfig());
-  }
-  stampPageNumbers(doc, pageRanges);
+  const { doc } = renderCombinedPdf(allocation, replenishment, pickfaces, config);
   const blob = doc.output('blob');
   triggerDownload(blob, outName('pdf'));
 });
@@ -404,20 +414,7 @@ el.downloadAll.addEventListener('click', () => {
   const xlsxBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
   const csv = movementCsvText();
 
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const pageRanges: PdfPageRange[] = [];
-  for (let i = 0; i < allocation.picklists.length; i++) {
-    if (i > 0) doc.addPage();
-    const startPage = doc.getNumberOfPages();
-    renderPicklistPdfPage(doc, allocation.picklists[i], pickfaces);
-    const endPage = doc.getNumberOfPages();
-    pageRanges.push({ startPage, endPage });
-  }
-  if (replenishment.tasks.length > 0) {
-    doc.addPage();
-    renderReplenPdfPage(doc, replenishment, config ?? withConfig());
-  }
-  stampPageNumbers(doc, pageRanges);
+  const { doc } = renderCombinedPdf(allocation, replenishment, pickfaces, config);
   const pdfBytes = new Uint8Array(doc.output('arraybuffer'));
 
   const files: Record<string, Uint8Array> = {

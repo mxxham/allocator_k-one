@@ -43,13 +43,96 @@ function getPageGeometry(doc: jsPDF): PageGeometry {
   };
 }
 
-function hasRoom(currentY: number, requiredHeight: number, geo: PageGeometry): boolean {
-  return currentY + requiredHeight <= geo.contentBottom;
-}
-
 function wrapText(doc: jsPDF, text: string, width: number): string[] {
   return doc.splitTextToSize(text, width);
 }
+
+// ── Layout constants ─────────────────────────────────────────────────────────
+
+const SIGNATURE_GAP = 8;
+const SIGNATURE_LINE_OFFSET = 22;
+const PAGE_NUMBER_RESERVE = 5;
+const SIGNATURE_BLOCK_HEIGHT = SIGNATURE_GAP + SIGNATURE_LINE_OFFSET + PAGE_NUMBER_RESERVE;
+
+// ── Picklist header ──────────────────────────────────────────────────────────
+
+function picklistHeaderHeight(doc: jsPDF, pl: Picklist, geo: PageGeometry): number {
+  let h = 9;
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  const row1Parts = [
+    `NO (Wave): ${pl.waveNo}`,
+    `Shipment: ${pl.shipmentNumbers.join(', ')}`,
+    `Slot: ${pl.slotTime ?? '-'}`,
+    `Truck: ${pl.truckType ?? '-'}`,
+    `Total: ${pl.totalCartons} ctn / ${pl.lines.length} stop`,
+  ];
+  const row1Lines = wrapText(doc, row1Parts.join('   |   '), geo.contentWidth);
+  h += row1Lines.length * 5 + 1;
+
+  const tujuanLines = wrapText(doc, `Tujuan: ${escape(pl.destination)} — ${escape(pl.shipToLocation)}`, geo.contentWidth);
+  h += tujuanLines.length * 5 + 1;
+
+  const doText = pl.orderNos.length ? pl.orderNos.join(', ') : '-';
+  const doLines = wrapText(doc, `DO Number: ${doText}`, geo.contentWidth);
+  h += doLines.length * 5 + 4;
+
+  return h;
+}
+
+function drawPicklistHeader(doc: jsPDF, pl: Picklist, geo: PageGeometry): void {
+  let y = geo.marginTop;
+
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`PICKLIST ${pl.picklistId}`, geo.marginLeft, y + 4);
+  y += 9;
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  const row1Parts = [
+    `NO (Wave): ${pl.waveNo}`,
+    `Shipment: ${pl.shipmentNumbers.join(', ')}`,
+    `Slot: ${pl.slotTime ?? '-'}`,
+    `Truck: ${pl.truckType ?? '-'}`,
+    `Total: ${pl.totalCartons} ctn / ${pl.lines.length} stop`,
+  ];
+  const row1Lines = wrapText(doc, row1Parts.join('   |   '), geo.contentWidth);
+  for (const line of row1Lines) {
+    doc.text(line, geo.marginLeft, y + 4);
+    y += 5;
+  }
+  y += 1;
+
+  const tujuanLines = wrapText(doc, `Tujuan: ${escape(pl.destination)} — ${escape(pl.shipToLocation)}`, geo.contentWidth);
+  for (const line of tujuanLines) {
+    doc.text(line, geo.marginLeft, y + 4);
+    y += 5;
+  }
+  y += 1;
+
+  const doText = pl.orderNos.length ? pl.orderNos.join(', ') : '-';
+  const doLines = wrapText(doc, `DO Number: ${doText}`, geo.contentWidth);
+  for (const line of doLines) {
+    doc.text(line, geo.marginLeft, y + 4);
+    y += 5;
+  }
+}
+
+function drawSignatures(doc: jsPDF, finalY: number, geo: PageGeometry): void {
+  const footY = finalY + SIGNATURE_GAP;
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Picker', geo.marginLeft, footY);
+  doc.text('Checker', 90, footY);
+  doc.text('Admin / Supervisor', 160, footY);
+  doc.line(geo.marginLeft, footY + SIGNATURE_LINE_OFFSET, 70, footY + SIGNATURE_LINE_OFFSET);
+  doc.line(90, footY + SIGNATURE_LINE_OFFSET, 146, footY + SIGNATURE_LINE_OFFSET);
+  doc.line(160, footY + SIGNATURE_LINE_OFFSET, 216, footY + SIGNATURE_LINE_OFFSET);
+}
+
+// ── Page numbering ───────────────────────────────────────────────────────────
 
 export type PdfPageRange = {
   startPage: number;
@@ -60,7 +143,6 @@ export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void 
   const geo = getPageGeometry(doc);
 
   if (pageRanges) {
-    // Per-picklist numbering: each picklist's pages are numbered independently
     for (const range of pageRanges) {
       const picklistPageCount = range.endPage - range.startPage + 1;
       for (let p = 0; p < picklistPageCount; p++) {
@@ -71,7 +153,6 @@ export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void 
       }
     }
   } else {
-    // Fallback: global numbering (used by generatePicklistPdfs which creates one doc per picklist)
     const pageCount = doc.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
@@ -85,64 +166,18 @@ export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void 
 // ── Picklist column widths (A4 landscape content = 268mm) ────────────────────
 
 const PICKLIST_COL_WIDTHS = [10, 30, 22, 50, 26, 20, 20, 14, 20, 12, 10] as const;
-const PICKLIST_TOTAL_WIDTH = PICKLIST_COL_WIDTHS.reduce((a, b) => a + b, 0);
 
 // ── Replenishment column widths (same layout) ───────────────────────────────
 
 const REPLEN_COL_WIDTHS = [10, 30, 22, 50, 26, 20, 20, 14, 20, 12, 10] as const;
-const REPLEN_TOTAL_WIDTH = REPLEN_COL_WIDTHS.reduce((a, b) => a + b, 0);
 
 // ── Picklist PDF rendering ──────────────────────────────────────────────────
 
 export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<string, { location: string }>) {
   const geo = getPageGeometry(doc);
+  const headerH = picklistHeaderHeight(doc, pl, geo);
+  const tableStartY = geo.marginTop + headerH;
 
-  let currentY = geo.marginTop;
-
-  // Title
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`PICKLIST ${pl.picklistId}`, geo.marginLeft, currentY + 4);
-  currentY += 9;
-
-  // Row 1: NO (Wave) | Shipment | Slot | Truck | Total
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  const row1Parts = [
-    `NO (Wave): ${pl.waveNo}`,
-    `Shipment: ${pl.shipmentNumbers.join(', ')}`,
-    `Slot: ${pl.slotTime ?? '-'}`,
-    `Truck: ${pl.truckType ?? '-'}`,
-    `Total: ${pl.totalCartons} ctn / ${pl.lines.length} stop`,
-  ];
-  const row1Text = row1Parts.join('   |   ');
-  const row1Lines = wrapText(doc, row1Text, geo.contentWidth);
-  for (const line of row1Lines) {
-    doc.text(line, geo.marginLeft, currentY + 4);
-    currentY += 5;
-  }
-  currentY += 1;
-
-  // Row 2: Tujuan (destination — shipToLocation)
-  const tujuanText = `Tujuan: ${escape(pl.destination)} — ${escape(pl.shipToLocation)}`;
-  const tujuanLines = wrapText(doc, tujuanText, geo.contentWidth);
-  for (const line of tujuanLines) {
-    doc.text(line, geo.marginLeft, currentY + 4);
-    currentY += 5;
-  }
-  currentY += 1;
-
-  // Row 3: DO Number (wrapped)
-  const doText = pl.orderNos.length ? pl.orderNos.join(', ') : '-';
-  const doLabel = `DO Number: ${doText}`;
-  const doLines = wrapText(doc, doLabel, geo.contentWidth);
-  for (const line of doLines) {
-    doc.text(line, geo.marginLeft, currentY + 4);
-    currentY += 5;
-  }
-  currentY += 4;
-
-  // ── Build table body ────────────────────────────────────────────────────
   const head = [['No', 'Lokasi', 'Material', 'Description', 'Bin To Bin', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '✓']];
   const body: any[][] = [];
   let lastPickType: string | null = null;
@@ -168,16 +203,20 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
     ]);
   }
 
-  // ── AutoTable with page-safe options ────────────────────────────────────
   (doc as any).autoTable({
-    startY: currentY,
+    startY: tableStartY,
     head,
     body,
     theme: 'grid',
     pageBreak: 'auto',
     rowPageBreak: 'auto',
     showHead: 'everyPage',
-    margin: { left: geo.marginLeft, right: geo.marginRight },
+    margin: {
+      left: geo.marginLeft,
+      right: geo.marginRight,
+      top: tableStartY,
+      bottom: SIGNATURE_BLOCK_HEIGHT,
+    },
     styles: {
       fontSize: 10,
       cellPadding: 1.5,
@@ -207,6 +246,9 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
       9: { cellWidth: PICKLIST_COL_WIDTHS[9], halign: 'right' },
       10: { cellWidth: PICKLIST_COL_WIDTHS[10], halign: 'center' },
     },
+    didDrawPage() {
+      drawPicklistHeader(doc, pl, geo);
+    },
     didDrawCell(data: any) {
       if (data.column.index === 10 && data.section === 'body') {
         const { x, y, width, height } = data.cell;
@@ -218,25 +260,8 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
     },
   });
 
-  // ── Footer / signatures ────────────────────────────────────────────────
-  const signatureHeight = 30;
-  let footY = (doc as any).lastAutoTable?.finalY ?? currentY + 20;
-
-  // Check if we have room for signatures on the current page
-  if (!hasRoom(footY + 4, signatureHeight, geo)) {
-    doc.addPage();
-    footY = geo.marginTop;
-  }
-
-  footY += 8;
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text('Picker', geo.marginLeft, footY);
-  doc.text('Checker', 90, footY);
-  doc.text('Admin / Supervisor', 160, footY);
-  doc.line(geo.marginLeft, footY + 22, 70, footY + 22);
-  doc.line(90, footY + 22, 146, footY + 22);
-  doc.line(160, footY + 22, 216, footY + 22);
+  const finalY = (doc as any).lastAutoTable?.finalY ?? tableStartY + 20;
+  drawSignatures(doc, finalY, geo);
 }
 
 // ── Replenishment PDF rendering ─────────────────────────────────────────────
@@ -254,13 +279,11 @@ export function renderReplenPdfPage(doc: jsPDF, replenishment: ReplenishmentResu
 
   let currentY = geo.marginTop;
 
-  // Title
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
   doc.text('REPLENISHMENT (Bin to Bin)', geo.marginLeft, currentY + 4);
   currentY += 9;
 
-  // Subtitle
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
   const subText = `Total: ${replenishment.stats.cartonsMoved} ctn / ${replenishment.tasks.length} moves`;
@@ -271,7 +294,6 @@ export function renderReplenPdfPage(doc: jsPDF, replenishment: ReplenishmentResu
   }
   currentY += 4;
 
-  // Table body
   const head = [['No', 'Dari Lokasi', 'Material', 'Description', 'Bin To Bin', 'Batch', 'Exp Date', 'Qty', 'UOM', 'Sisa', '✓']];
   const body = sorted.map((t, i) => [
     String(i + 1),
