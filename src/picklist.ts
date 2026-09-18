@@ -105,13 +105,14 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /** cartons → "2 plt + 14 ctn" */
-export function formatQty(cartons: number, upp: number): string {
-  if (!upp || upp <= 1) return `${cartons} ctn`;
+export function formatQty(cartons: number, upp: number, uom?: string | null): string {
+  if (!upp || upp <= 1) return `${cartons} ${uomLabel(uom ?? null)}`;
   const plt = Math.floor(cartons / upp);
   const loose = cartons % upp;
-  if (plt && loose) return `${plt} plt + ${loose} ctn`;
+  const unit = uomLabel(uom ?? null);
+  if (plt && loose) return `${plt} plt + ${loose} ${unit}`;
   if (plt) return `${plt} plt`;
-  return `${loose} ctn`;
+  return `${loose} ${unit}`;
 }
 
 export function uomLabel(uom: string | null): string {
@@ -121,6 +122,6 @@ export function uomLabel(uom: string | null): string {
   if (lower === 'plt' || lower === 'pal') return 'Pallet';
   if (lower === 'drum' || lower === 'drm') return 'Drum';
   if (lower === 'fluidbag' || lower === 'flb') return 'Fluidbag';
-  if (lower === 'ibm') return 'IBM';
+  if (lower === 'ibc' || lower === 'ibm') return 'IBC';
   return uom;
 }

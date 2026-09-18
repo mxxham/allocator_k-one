@@ -8,7 +8,7 @@ import { renderPicklistHtml } from '../adapters/html-output.js';
 import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
-import { buildPicklists, uomLabel } from '../picklist.js';
+import { buildPicklists, formatQty, uomLabel } from '../picklist.js';
 import { replenish, sequenceReplenishment } from '../replenishment.js';
 import type {
   AllocationResult,
@@ -37,6 +37,9 @@ const el = {
   dropzone: $('#dropzone'),
   fileInput: $<HTMLInputElement>('#fileInput'),
   fileLabel: $('#fileLabel'),
+  uomZone: $('#uomZone'),
+  uomFileInput: $<HTMLInputElement>('#uomFileInput'),
+  uomFileLabel: $('#uomFileLabel'),
   asOf: $<HTMLInputElement>('#asOf'),
   minShelfLife: $<HTMLInputElement>('#minShelfLife'),
   targetQty: $<HTMLSelectElement>('#targetQty'),
@@ -96,6 +99,27 @@ async function handleFile(f: File): Promise<void> {
   }
 }
 
+// ---- optional UOM master (corrects a wrong per-bin Carton/Drum/Pail label) --
+
+el.uomZone.addEventListener('click', () => el.uomFileInput.click());
+el.uomFileInput.addEventListener('change', () => {
+  const f = el.uomFileInput.files?.[0];
+  if (f) handleUomFile(f);
+});
+
+async function handleUomFile(f: File): Promise<void> {
+  el.uomFileLabel.textContent = `Reading ${f.name}…`;
+  try {
+    const buf = await f.arrayBuffer();
+    (window as unknown as { __uomBuf: ArrayBuffer }).__uomBuf = buf;
+    el.uomZone.classList.add('loaded');
+    el.uomFileLabel.textContent = `✓ ${f.name} — will correct any wrong UOM labels`;
+  } catch (err) {
+    el.uomZone.classList.remove('loaded');
+    el.uomFileLabel.textContent = `Could not read ${f.name}: ${(err as Error).message}`;
+  }
+}
+
 function setStatus(msg: string, kind: 'idle' | 'busy' | 'ok' | 'error'): void {
   el.status.textContent = msg;
   el.status.dataset.kind = kind;
@@ -106,12 +130,12 @@ function setStatus(msg: string, kind: 'idle' | 'busy' | 'ok' | 'error'): void {
 el.runBtn.addEventListener('click', () => {
   const buf = (window as unknown as { __buf?: ArrayBuffer }).__buf;
   if (!buf) return;
+  const uomBuf = (window as unknown as { __uomBuf?: ArrayBuffer }).__uomBuf;
   setStatus('Running FEFO allocation…', 'busy');
   el.runBtn.disabled = true;
-  // let the status paint before the (synchronous, but fast) engine runs
   requestAnimationFrame(() => {
     try {
-      run(buf);
+      run(buf, uomBuf);
       setStatus(`Done — as of ${el.asOf.value}.`, 'ok');
     } catch (err) {
       console.error(err);
@@ -132,9 +156,9 @@ function buildConfig(): AllocatorConfig {
   });
 }
 
-function run(buf: ArrayBuffer): void {
+function run(buf: ArrayBuffer, uomBuf?: ArrayBuffer): void {
   config = buildConfig();
-  loaded = loadWorkbookFromBuffer(buf, config);
+  loaded = loadWorkbookFromBuffer(buf, config, uomBuf);
   stock = loaded.stock;
 
   allocation = allocate(loaded.stock, loaded.demand, config, loaded.stagedBySku);

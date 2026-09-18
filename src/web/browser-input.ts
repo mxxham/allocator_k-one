@@ -19,9 +19,26 @@ export interface LoadedData {
 }
 
 /** Same field mapping and rules as adapters/excel-input.ts, for the in-browser workbook. */
-export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorConfig): LoadedData {
+export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorConfig, uomBuf?: ArrayBuffer): LoadedData {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
   const warnings: Warning[] = [];
+
+  // ---- optional UOM master (from a separate Book4.xlsx / SAP export) ------
+  const uomMaster = new Map<string, string>();
+  if (uomBuf) {
+    try {
+      const uomWb = XLSX.read(uomBuf, { type: 'array', cellDates: true });
+      const uomWs = uomWb.Sheets[uomWb.SheetNames[0]];
+      if (uomWs) {
+        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(uomWs, { defval: null });
+        for (const row of rows) {
+          const mat = asSku(row['Material']);
+          const uom = asString(row['UOM']);
+          if (mat && uom) uomMaster.set(mat, uom);
+        }
+      }
+    } catch { /* non-fatal: fall back to embedded master */ }
+  }
 
   const master = new Map<string, { description: string; upp: number; uom: string }>();
   for (const row of sheetRows(wb, SHEETS.master, 1)) {
@@ -91,7 +108,7 @@ export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorCon
       grDate: asDate(row['GR date']),
       qtyCartons: qty,
       upp,
-      uom: asString(row['uom']) || master.get(sku)?.uom || null,
+      uom: uomMaster.get(sku) || asString(row['uom']) || master.get(sku)?.uom || null,
       isFullPallet: qty >= upp,
     });
   }
