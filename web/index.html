@@ -7,13 +7,13 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>">
 <style>
   :root{
-    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#f0f1f4; --line:#dde0e5;
-    --ink:#1a1d23; --ink-dim:#5f6775; --ink-faint:#8b919c;
-    --amber:#d97706; --amber-ink:#ffffff;
-    --ok:#16a34a; --warn:#ca8a04; --bad:#dc2626;
+    --bg:#14171c; --panel:#1b2027; --panel-2:#20262e; --line:#2b323c;
+    --ink:#e7ebf0; --ink-dim:#9aa5b1; --ink-faint:#6b7684;
+    --amber:#f2a93b; --amber-ink:#1a1305;
+    --ok:#3fb27f; --warn:#e0a53c; --bad:#e2604f;
     --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
     --sans: -apple-system, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
-    --radius: 4px;
+    --radius: 3px;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
@@ -22,7 +22,7 @@
 
   header.top{
     display:flex;align-items:baseline;gap:.9rem;padding:1.4rem 2rem 1.1rem;
-    border-bottom:1px solid var(--line);background:var(--panel);
+    border-bottom:1px solid var(--line);
   }
   header.top h1{font-size:1.15rem;font-weight:650;margin:0;letter-spacing:.01em;}
   header.top .rule{color:var(--ink-faint);}
@@ -43,7 +43,7 @@
     border:1.5px dashed var(--line);border-radius:var(--radius);padding:1.6rem 1.2rem;
     text-align:center;cursor:pointer;transition:border-color .15s, background .15s;
   }
-  #dropzone:hover, #dropzone.drag{border-color:var(--amber);background:#fef7e8;}
+  #dropzone:hover, #dropzone.drag{border-color:var(--amber);background:#1f2530;}
   #dropzone .icon{font-size:1.6rem;display:block;margin-bottom:.4rem;opacity:.8;}
   #dropzone .primary{font-size:.92rem;}
   #dropzone .secondary{font-size:.78rem;color:var(--ink-faint);margin-top:.25rem;}
@@ -72,7 +72,7 @@
   #runBtn{
     background:var(--amber);color:var(--amber-ink);padding:.6rem 1.1rem;margin-top:.9rem;width:100%;
   }
-  #runBtn:hover:not(:disabled){filter:brightness(1.08);}
+  #runBtn:hover:not(:disabled){filter:brightness(1.06);}
 
   .dl-row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.9rem;}
   .dl-row button{
@@ -80,7 +80,7 @@
   }
   .dl-row button:hover:not(:disabled){border-color:var(--amber);color:var(--amber);}
   .dl-row button.primary-dl{background:var(--amber);color:var(--amber-ink);border-color:var(--amber);}
-  .dl-row button.primary-dl:hover:not(:disabled){filter:brightness(1.08);}
+  .dl-row button.primary-dl:hover:not(:disabled){filter:brightness(1.06);}
 
   #results[hidden]{display:none;}
 
@@ -102,22 +102,22 @@
   .panel{display:none;}
   .panel.visible{display:block;}
 
-  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);}
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);}
   table{border-collapse:collapse;width:100%;font-size:.82rem;}
   th,td{padding:.45rem .6rem;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;}
-  th{background:var(--panel-2);color:var(--ink-dim);font-weight:600;font-size:.7rem;
+  th{background:var(--panel-2);color:var(--ink-faint);font-weight:600;font-size:.7rem;
     text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;}
   td{font-family:var(--mono);color:var(--ink);}
-  tr:hover td{background:#f5f6f8;}
+  tr:hover td{background:#1f2530;}
   .empty{color:var(--ink-faint);font-size:.86rem;padding:1rem 0;}
 
   .flag{color:var(--bad);font-family:var(--sans);font-weight:600;font-size:.72rem;}
   .tag{font-family:var(--sans);font-size:.68rem;font-weight:700;padding:.12rem .4rem;border-radius:2px;}
-  .tag-pick{background:#dcfce7;color:var(--ok);}
-  .tag-replen{background:#dbeafe;color:#2563eb;}
-  .tag-info{background:#e8eaed;color:var(--ink-dim);}
-  .tag-warn{background:#fef9c3;color:var(--warn);}
-  .tag-error{background:#fee2e2;color:var(--bad);}
+  .tag-pick{background:#22392c;color:var(--ok);}
+  .tag-replen{background:#2a3350;color:#8fb0ff;}
+  .tag-info{background:#26303c;color:var(--ink-dim);}
+  .tag-warn{background:#3a3120;color:var(--warn);}
+  .tag-error{background:#3a2323;color:var(--bad);}
 
   .pl-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
     margin-bottom:.7rem;padding:.2rem .9rem .8rem;}
@@ -153,6 +153,7 @@
       </div>
       <input type="file" id="fileInput" accept=".xlsx,.xlsm" hidden />
       <div class="status-line" id="status" data-kind="idle">Waiting for a workbook.</div>
+
       <button id="runBtn" disabled>Run allocation</button>
     </div>
 
@@ -179,7 +180,7 @@
       </div>
       <div class="dl-row">
         <button id="downloadXlsx" disabled>Picklist workbook (.xlsx)</button>
-        <button id="downloadHtml" disabled>Picklist (.pdf)</button>
+        <button id="downloadHtml" disabled>Print sheet (.html)</button>
         <button id="downloadCsv" disabled>Movement report (.csv)</button>
         <button id="downloadAll" disabled class="primary-dl">Download all (.zip)</button>
       </div>

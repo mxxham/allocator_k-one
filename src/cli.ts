@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const input = argv.find((a) => !a.startsWith('--'));
   if (!input) {
-    console.error('usage: tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD] [--min-shelf-life DAYS] [--uom-master FILE.xlsx] [--no-split] [--no-replenish]');
+    console.error('usage: tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD] [--min-shelf-life DAYS] [--no-split] [--no-replenish]');
     process.exit(1);
   }
   const flag = (name: string): string | undefined => {
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   const outDir = flag('out') ?? '.';
   const stamp = config.asOf.toISOString().slice(0, 10);
 
-  const { stock, demand, stagedBySku, warnings } = await loadWorkbook(input, config, flag('uom-master'));
+  const { stock, demand, stagedBySku, warnings } = await loadWorkbook(input, config);
 
   // 1. outbound picking
   const result = allocate(stock, demand, config, stagedBySku);
