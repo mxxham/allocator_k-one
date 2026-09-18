@@ -14,7 +14,7 @@ export interface LoadedData {
   stock: StockBin[];
   demand: DemandLine[];
   stagedBySku: Map<string, number>;
-  master: Map<string, { description: string; upp: number }>;
+  master: Map<string, { description: string; upp: number; uom: string }>;
   warnings: Warning[];
 }
 
@@ -23,11 +23,11 @@ export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorCon
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
   const warnings: Warning[] = [];
 
-  const master = new Map<string, { description: string; upp: number }>();
+  const master = new Map<string, { description: string; upp: number; uom: string }>();
   for (const row of sheetRows(wb, SHEETS.master, 1)) {
     const sku = asSku(row['Material']);
     if (!sku) continue;
-    master.set(sku, { description: asString(row['Material Description']), upp: asNumber(row['UPP']) || 1 });
+    master.set(sku, { description: asString(row['Material Description']), upp: asNumber(row['UPP']) || 1, uom: asString(row['UOM']) || 'CAR' });
   }
 
   const stock: StockBin[] = [];
@@ -91,7 +91,7 @@ export function loadWorkbookFromBuffer(buffer: ArrayBuffer, config: AllocatorCon
       grDate: asDate(row['GR date']),
       qtyCartons: qty,
       upp,
-      uom: asString(row['uom']) || null,
+      uom: asString(row['uom']) || master.get(sku)?.uom || null,
       isFullPallet: qty >= upp,
     });
   }

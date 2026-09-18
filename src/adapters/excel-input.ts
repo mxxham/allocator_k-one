@@ -28,7 +28,7 @@ export interface LoadedData {
   demand: DemandLine[];
   /** cartons per SKU already in an outbound staging lane */
   stagedBySku: Map<string, number>;
-  master: Map<string, { description: string; upp: number }>;
+  master: Map<string, { description: string; upp: number; uom: string }>;
   warnings: Warning[];
 }
 
@@ -38,13 +38,14 @@ export async function loadWorkbook(path: string, config: AllocatorConfig): Promi
   const warnings: Warning[] = [];
 
   // ---- SKU master ---------------------------------------------------------
-  const master = new Map<string, { description: string; upp: number }>();
+  const master = new Map<string, { description: string; upp: number; uom: string }>();
   for (const row of readRows(wb, SHEETS.master, SHEETS.masterHeaderRow)) {
     const sku = asSku(row['Material']);
     if (!sku) continue;
     master.set(sku, {
       description: asString(row['Material Description']),
       upp: asNumber(row['UPP']) || 1,
+      uom: asString(row['UOM']) || 'CAR',
     });
   }
 
@@ -131,7 +132,7 @@ export async function loadWorkbook(path: string, config: AllocatorConfig): Promi
       grDate: asDate(row['GR date']),
       qtyCartons: qty,
       upp,
-      uom: asString(row['uom']) || null,
+      uom: asString(row['uom']) || master.get(sku)?.uom || null,
       isFullPallet: qty >= upp,
     });
   }
