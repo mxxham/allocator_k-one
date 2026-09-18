@@ -3,3 +3,24 @@ out/*
 !out/.gitkeep
 dist/
 *.log
+
+.vercel
+.env*
+
+# Kiro session files
+.omo/
+
+# Verification outputs (keep verification scripts, not outputs)
+verify-output*.txt
+verify-sep*.txt
+verify-*-final.txt
+
+# Temporary test files
+test-pdf.cjs
+inspect-pdf.cjs
+inspect-pdf.ts
+audit-forensic.ts
+
+# Generated picklists (examples)
+picklist_*.html
+picklist_*.xlsx

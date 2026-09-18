@@ -2,7 +2,7 @@ import { zipSync } from 'fflate';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import { allocate, relocateByWaveOrder } from '../allocator.js';
-import { applyMovements } from '../binselect.js';
+import { computeStockAfterMovements } from '../ledger.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import { renderPicklistHtml } from '../adapters/html-output.js';
 import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
@@ -140,14 +140,13 @@ function run(buf: ArrayBuffer): void {
 
   allocation = allocate(loaded.stock, loaded.demand, config, loaded.stagedBySku);
   allocation.warnings.unshift(...loaded.warnings);
-  relocateByWaveOrder(allocation.lines, pickfaces, config);
+  relocateByWaveOrder(allocation.lines, pickfaces, config, loaded.stock);
   allocation.picklists = buildPicklists(allocation, loaded.demand, config);
 
-  const pickedByBin = new Map<string, number>();
-  for (const l of allocation.lines) pickedByBin.set(l.binId, (pickedByBin.get(l.binId) ?? 0) + l.qtyPick);
-  const stockAfterPicks = applyMovements(loaded.stock, pickedByBin);
+  // Use computeStockAfterMovements to account for picks AND relocations
+  const stockAfterMovements = computeStockAfterMovements(loaded.stock, allocation.lines, pickfaces);
 
-  replenishment = replenish(stockAfterPicks, pickfaces, config, loaded.demand, allocation.lines);
+  replenishment = replenish(stockAfterMovements, pickfaces, config, loaded.demand, allocation.lines);
   replenishment.tasks = sequenceReplenishment(replenishment.tasks);
 
   movement = buildMovementReport(allocation, replenishment);

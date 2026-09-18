@@ -5,7 +5,7 @@ import { buildPicklists } from './picklist.js';
 import { derivePickfaces } from './pickface.js';
 import { replenish, sequenceReplenishment } from './replenishment.js';
 import { buildMovementReport } from './movement.js';
-import { applyMovements } from './binselect.js';
+import { computeStockAfterMovements } from './ledger.js';
 import { loadWorkbook } from './adapters/excel-input.js';
 import { writePicklistWorkbook } from './adapters/excel-output.js';
 import { renderPicklistHtml } from './adapters/html-output.js';
@@ -43,17 +43,15 @@ async function main(): Promise<void> {
   // 1. outbound picking
   const result = allocate(stock, demand, config, stagedBySku);
   result.warnings.unshift(...warnings);
-  relocateByWaveOrder(result.lines, pickfaces, config);
+  relocateByWaveOrder(result.lines, pickfaces, config, stock);
   result.picklists = buildPicklists(result, demand, config);
 
-  // 2. pickface replenishment, against what's left after today's picks
-  const pickedByBin = new Map<string, number>();
-  for (const l of result.lines) pickedByBin.set(l.binId, (pickedByBin.get(l.binId) ?? 0) + l.qtyPick);
-  const stockAfterPicks = applyMovements(stock, pickedByBin);
+  // 2. pickface replenishment, against stock after picks AND relocations
+  const stockAfterMovements = computeStockAfterMovements(stock, result.lines, pickfaces);
 
   const replenishment = argv.includes('--no-replenish')
     ? undefined
-    : replenish(stockAfterPicks, pickfaces, config, demand, result.lines);
+    : replenish(stockAfterMovements, pickfaces, config, demand, result.lines);
   if (replenishment) replenishment.tasks = sequenceReplenishment(replenishment.tasks);
 
   // 3. movement report
