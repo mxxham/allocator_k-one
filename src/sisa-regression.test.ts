@@ -1,0 +1,440 @@
+/**
+ * Sisa semantics regression tests.
+ *
+ * Run: npx tsx src/sisa-regression.test.ts
+ */
+import { strict as assert } from 'node:assert';
+import { allocate, relocateByWaveOrder } from './allocator.js';
+import { stockIdentityKey, computeStockAfterMovements } from './ledger.js';
+import { derivePickfaces } from './pickface.js';
+import { withConfig, type AllocatorConfig } from './config.js';
+import { loadWorkbook } from './adapters/excel-input.js';
+import type { AllocationLine, StockBin, DemandLine, PickfaceAssignment } from './types.js';
+
+// ── tiny test runner ─────────────────────────────────────────────────────────
+
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+
+function describe(name: string, fn: () => void) {
+  console.log(`\n  ${name}`);
+  fn();
+}
+
+function it(name: string, fn: () => void) {
+  try {
+    fn();
+    passed++;
+    console.log(`    ✓ ${name}`);
+  } catch (e: any) {
+    failed++;
+    const msg = `    ✗ ${name}\n      ${e.message}`;
+    console.log(msg);
+    failures.push(msg);
+  }
+}
+
+function eq<T>(actual: T, expected: T, label: string) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function gt(actual: number, min: number, label: string) {
+  if (!(actual > min)) {
+    throw new Error(`${label}: expected > ${min}, got ${actual}`);
+  }
+}
+
+function gte(actual: number, min: number, label: string) {
+  if (!(actual >= min)) {
+    throw new Error(`${label}: expected >= ${min}, got ${actual}`);
+  }
+}
+
+// ── synthetic data helpers ───────────────────────────────────────────────────
+
+function makeBin(
+  location: string, sku: string, batch: string, expiry: string,
+  qty: number, upp: number,
+): StockBin {
+  return {
+    binId: `${location}|${sku}|${batch}`,
+    location,
+    aisle: location.slice(0, 2),
+    bay: parseInt(location.slice(2, 4)),
+    level: location.slice(4, 5),
+    position: parseInt(location.slice(5, 7)),
+    sku,
+    description: `SKU ${sku}`,
+    batch,
+    expiryDate: new Date(expiry),
+    grDate: null,
+    qtyCartons: qty,
+    upp,
+    uom: 'CAR',
+    isFullPallet: qty >= upp,
+  };
+}
+
+function makeDemand(
+  shipment: string, wave: string, sku: string, qty: number, upp: number,
+): DemandLine {
+  return {
+    shipmentNumber: shipment,
+    waveNo: wave,
+    orderNos: [`ORD-${shipment}`],
+    sku,
+    description: `SKU ${sku}`,
+    qtyCartons: qty,
+    upp,
+    destination: 'STAGING',
+    shipToLocation: 'STAGING',
+    transport: null,
+    truckType: null,
+    slotTime: null,
+    deliveryDate: null,
+  };
+}
+
+function makeConfig(): AllocatorConfig {
+  return withConfig({
+    asOf: new Date('2026-09-15'),
+    minRemainingShelfLifeDays: 1,
+    nearExpiryWarningDays: 365,
+  });
+}
+
+// ── Run workbook pipeline once (async-safe top-level await) ─────────────────
+
+interface WorkbookResult {
+  stock: StockBin[];
+  lines: AllocationLine[];
+  pickfaces: Map<string, PickfaceAssignment>;
+  finalStock: StockBin[];
+  shortages: any[];
+}
+
+const wr: WorkbookResult = await (async () => {
+  const config = makeConfig();
+  const { stock, demand, stagedBySku } = await loadWorkbook(
+    'data/Warehouse_Management_System_15_September_2026_.xlsx', config,
+  );
+  const pickfaces = derivePickfaces(stock, config);
+  const result = allocate(stock, demand, config, stagedBySku);
+  relocateByWaveOrder(result.lines, pickfaces, config, stock);
+  const finalStock = computeStockAfterMovements(stock, result.lines, pickfaces);
+  return { stock, lines: result.lines, pickfaces, finalStock, shortages: result.shortages };
+})();
+
+// ── 1. SKU 550076636 regression test ────────────────────────────────────────
+
+describe('SKU 550076636 multi-wave regression', () => {
+  const skuLines = wr.lines.filter(l => l.sku === '550076636');
+
+  it('has exactly 2 allocation lines', () => {
+    eq(skuLines.length, 2, 'line count');
+  });
+
+  it('both lines from CB21A02, batch 24H26JJ, expiry 2030-08-24', () => {
+    for (const l of skuLines) {
+      eq(l.location, 'CB21A02', `line ${l.waveNo} location`);
+      eq(l.batch, '24H26JJ', `line ${l.waveNo} batch`);
+      eq(l.expiryDate.toISOString().slice(0, 10), '2030-08-24', `line ${l.waveNo} expiry`);
+    }
+  });
+
+  it('wave 6 picks 2, wave 13 picks 11, total 13', () => {
+    const w6 = skuLines.find(l => l.waveNo === '6')!;
+    const w13 = skuLines.find(l => l.waveNo === '13')!;
+    eq(w6.qtyPick, 2, 'wave 6 qtyPick');
+    eq(w13.qtyPick, 11, 'wave 13 qtyPick');
+    eq(skuLines.reduce((s, l) => s + l.qtyPick, 0), 13, 'total qtyPick');
+  });
+
+  it('sisa after wave 6 = 13, after wave 13 = 2', () => {
+    const w6 = skuLines.find(l => l.waveNo === '6')!;
+    const w13 = skuLines.find(l => l.waveNo === '13')!;
+    eq(w6.qtyRemainingInBin, 13, 'wave 6 sisa');
+    eq(w13.qtyRemainingInBin, 2, 'wave 13 sisa');
+  });
+
+  it('no pallet breaks', () => {
+    for (const l of skuLines) eq(l.breaksPallet, false, `line ${l.waveNo} breaksPallet`);
+  });
+
+  it('no shortages for this SKU', () => {
+    const short = wr.shortages.filter((s: any) => s.sku === '550076636');
+    eq(short.length, 0, 'shortage count');
+  });
+
+  it('initial stock at CB21A02 >= 13 cartons', () => {
+    const bin = wr.stock.find(
+      b => b.sku === '550076636' && b.location === 'CB21A02',
+    );
+    gte(bin?.qtyCartons ?? 0, 13, 'initial stock at CB21A02');
+  });
+});
+
+// ── 2. Ordinary single pick ─────────────────────────────────────────────────
+
+describe('Ordinary single pick', () => {
+  it('picking 3 from 10 leaves sisa = 7', () => {
+    const config = makeConfig();
+    const stock = [makeBin('CC01B01', 'SKU1', 'B1', '2030-06-01', 10, 48)];
+    const demand = [makeDemand('S1', '1', 'SKU1', 3, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+    eq(result.lines.length, 1, 'line count');
+    eq(result.lines[0].qtyPick, 3, 'qtyPick');
+    eq(result.lines[0].qtyRemainingInBin, 7, 'sisa');
+  });
+});
+
+// ── 3. Pallet break source — sisa after pick, before reloc out ──────────────
+
+describe('Pallet break source — sisa is after pick not after reloc', () => {
+  it('source sisa = 43, breaksPallet = true', () => {
+    const config = makeConfig();
+    const stock = [makeBin('CD01B01', 'SKU2', 'B2', '2030-06-01', 48, 48)];
+    const demand = [makeDemand('S2', '1', 'SKU2', 5, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+    eq(result.lines.length, 1, 'line count');
+    eq(result.lines[0].breaksPallet, true, 'breaksPallet');
+    eq(result.lines[0].qtyRemainingInBin, 43, 'source sisa');
+    eq(result.lines[0].qtyPick, 5, 'qtyPick');
+  });
+});
+
+// ── 4. Relocated stock at pickface — identity preserved ─────────────────────
+
+describe('Relocated stock — identity preserved (same batch+expiry, diff location)', () => {
+  it('source sisa = 43, pickface receives 43 via reloc', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CD01B01', 'SKU3', 'B3', '2030-06-01', 48, 48),
+      makeBin('CC01A01', 'SKU3', 'B3', '2030-06-01', 0, 48),
+    ];
+    const demand = [makeDemand('S3', '1', 'SKU3', 5, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const src = result.lines[0];
+    eq(src.location, 'CD01B01', 'source location');
+    eq(src.breaksPallet, true, 'breaksPallet');
+    eq(src.qtyRemainingInBin, 43, 'source sisa');
+
+    const srcKey = stockIdentityKey(src.location, src.sku, src.batch, src.expiryDate);
+    const destKey = stockIdentityKey('CC01A01', src.sku, src.batch, src.expiryDate);
+    eq(srcKey.split('|')[2], destKey.split('|')[2], 'batch matches');
+    eq(srcKey.split('|')[3], destKey.split('|')[3], 'expiry matches');
+    eq(srcKey.split('|')[0], 'CD01B01', 'source location in key');
+    eq(destKey.split('|')[0], 'CC01A01', 'dest location in key');
+
+    const finalStock = computeStockAfterMovements(stock, result.lines, pickfaces);
+    const srcBin = finalStock.find(b => b.location === 'CD01B01' && b.sku === 'SKU3')!;
+    const destBin = finalStock.find(b => b.location === 'CC01A01' && b.sku === 'SKU3')!;
+    eq(srcBin.qtyCartons, 0, 'source final qty');
+    eq(destBin.qtyCartons, 43, 'pickface final qty');
+  });
+});
+
+// ── 5. Multiple source pallets — earliest expiry first (FEFO) ───────────────
+
+describe('FEFO — earliest expiry consumed first', () => {
+  it('takes all 48 from earlier expiry, then 12 from later', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CD01B01', 'SKU4', 'BA', '2030-01-01', 48, 48),
+      makeBin('CD02B01', 'SKU4', 'BB', '2030-06-01', 48, 48),
+    ];
+    const demand = [makeDemand('S4', '1', 'SKU4', 60, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    eq(result.lines.length, 2, 'line count');
+    const l1 = result.lines.find(l => l.batch === 'BA')!;
+    const l2 = result.lines.find(l => l.batch === 'BB')!;
+    eq(l1.qtyPick, 48, 'earlier expiry qtyPick');
+    eq(l1.qtyRemainingInBin, 0, 'earlier expiry sisa');
+    eq(l2.qtyPick, 12, 'later expiry qtyPick');
+    eq(l2.qtyRemainingInBin, 36, 'later expiry sisa');
+    eq(l1.expiryDate < l2.expiryDate, true, 'FEFO order');
+  });
+});
+
+// ── 6. Multiple expiry at same location — independent identities ────────────
+
+describe('Multiple expiry at same location — independent identities', () => {
+  it('two batches tracked independently', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CD01B01', 'SKU5', 'BA', '2030-01-01', 20, 48),
+      makeBin('CD01B01', 'SKU5', 'BB', '2030-06-01', 20, 48),
+    ];
+    const demand = [makeDemand('S5', '1', 'SKU5', 25, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const keyA = stockIdentityKey('CD01B01', 'SKU5', 'BA', new Date('2030-01-01'));
+    const keyB = stockIdentityKey('CD01B01', 'SKU5', 'BB', new Date('2030-06-01'));
+    eq(keyA === keyB, false, 'identity keys must differ');
+
+    eq(result.lines.length, 2, 'line count');
+    const lA = result.lines.find(l => l.batch === 'BA')!;
+    const lB = result.lines.find(l => l.batch === 'BB')!;
+    eq(lA.qtyPick, 20, 'batch A pick');
+    eq(lA.qtyRemainingInBin, 0, 'batch A sisa');
+    eq(lB.qtyPick, 5, 'batch B pick');
+    eq(lB.qtyRemainingInBin, 15, 'batch B sisa');
+  });
+});
+
+// ── 7. Later pick consuming matching identity — chronological sisa ───────────
+
+describe('Later pick from same identity — chronological sisa', () => {
+  it('wave 1 sisa = 25, wave 2 sisa = 20 (Phase 3 preserved after re-anchor)', () => {
+    const config = makeConfig();
+    const stock = [makeBin('CC01B01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
+    const demand = [
+      makeDemand('S6a', '1', 'SKU6', 10, 48),
+      makeDemand('S6b', '2', 'SKU6', 5, 48),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    eq(result.lines.length, 2, 'line count');
+    const w1 = result.lines.find(l => l.waveNo === '1')!;
+    const w2 = result.lines.find(l => l.waveNo === '2')!;
+    eq(w1.qtyPick, 10, 'wave 1 qtyPick');
+    eq(w1.qtyRemainingInBin, 25, 'wave 1 sisa');
+    eq(w2.qtyPick, 5, 'wave 2 qtyPick');
+    eq(w2.qtyRemainingInBin, 20, 'wave 2 sisa');
+  });
+});
+
+// ── 8. Re-anchored lines preserve Phase 3 sisa (Phase 5 removed) ───────────
+
+describe('Re-anchored lines keep Phase 3 sisa (no Phase 5 overwrite)', () => {
+  it('wave 2 re-anchored to pickface still has sisa=20 from source bin', () => {
+    const config = makeConfig();
+    const stock = [makeBin('CC01B01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
+    const demand = [
+      makeDemand('S6a', '1', 'SKU6', 10, 48),
+      makeDemand('S6b', '2', 'SKU6', 5, 48),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const w2 = result.lines.find(l => l.waveNo === '2')!;
+    const pf = pickfaces.get('SKU6');
+    eq(w2.location, pf!.location, 'wave 2 re-anchored to pickface');
+    eq(w2.qtyRemainingInBin, 20, 'wave 2 sisa preserved from Phase 3');
+    gt(w2.qtyRemainingInBin, 0, 'wave 2 sisa positive (not recomputed at pickface)');
+  });
+});
+
+// ── 9. RELOC_OUT is NOT customer consumption ────────────────────────────────
+
+describe('RELOC_OUT is not customer consumption', () => {
+  it('every breaksPallet source line has sisa > 0', () => {
+    const breakLines = wr.lines.filter(l => l.breaksPallet);
+    gt(breakLines.length, 0, 'breakLines count');
+    for (const l of breakLines) {
+      gt(l.qtyRemainingInBin, 0, `${l.location} ${l.sku} ${l.batch} sisa`);
+    }
+  });
+
+  it('final stock at reloc source identity is non-negative', () => {
+    const breakLines = wr.lines.filter(l => l.breaksPallet);
+    for (const l of breakLines) {
+      const key = stockIdentityKey(l.location, l.sku, l.batch, l.expiryDate);
+      const finalQty = wr.finalStock
+        .filter(b => stockIdentityKey(b.location, b.sku, b.batch, b.expiryDate) === key)
+        .reduce((s, b) => s + b.qtyCartons, 0);
+      gte(finalQty, 0, `reloc source ${key} non-negative`);
+    }
+  });
+});
+
+// ── 10. System-wide conservation ─────────────────────────────────────────────
+
+describe('System-wide conservation', () => {
+  it('totalFinal === totalInitial - totalPicked', () => {
+    const totalInitial = wr.stock.reduce((s, b) => s + b.qtyCartons, 0);
+    const totalFinal = wr.finalStock.reduce((s, b) => s + b.qtyCartons, 0);
+    const totalPicked = wr.lines.reduce((s, l) => s + l.qtyPick, 0);
+
+    eq(totalFinal, totalInitial - totalPicked, 'conservation');
+    console.log(`      initial=${totalInitial} picked=${totalPicked} final=${totalFinal}`);
+  });
+});
+
+// ── 11. Identity-level conservation ─────────────────────────────────────────
+
+describe('Identity-level conservation', () => {
+  it('final === initial + relocIn - relocOut - picks for each identity with picks', () => {
+    const initialMap = new Map<string, number>();
+    for (const b of wr.stock) {
+      const key = stockIdentityKey(b.location, b.sku, b.batch, b.expiryDate);
+      initialMap.set(key, (initialMap.get(key) ?? 0) + b.qtyCartons);
+    }
+
+    const finalMap = new Map<string, number>();
+    for (const b of wr.finalStock) {
+      const key = stockIdentityKey(b.location, b.sku, b.batch, b.expiryDate);
+      finalMap.set(key, (finalMap.get(key) ?? 0) + b.qtyCartons);
+    }
+
+    const relocIn = new Map<string, number>();
+    const relocOut = new Map<string, number>();
+    for (const l of wr.lines) {
+      if (!l.breaksPallet) continue;
+      const pf = wr.pickfaces.get(l.sku);
+      if (!pf) continue;
+      if (l.location === pf.location) continue;
+      const sourceKey = stockIdentityKey(l.location, l.sku, l.batch, l.expiryDate);
+      const destKey = stockIdentityKey(pf.location, l.sku, l.batch, l.expiryDate);
+      relocIn.set(destKey, (relocIn.get(destKey) ?? 0) + l.qtyRemainingInBin);
+      relocOut.set(sourceKey, (relocOut.get(sourceKey) ?? 0) + l.qtyRemainingInBin);
+    }
+
+    const picksMap = new Map<string, number>();
+    for (const l of wr.lines) {
+      const key = stockIdentityKey(l.location, l.sku, l.batch, l.expiryDate);
+      picksMap.set(key, (picksMap.get(key) ?? 0) + l.qtyPick);
+    }
+
+    let checked = 0;
+    for (const [key, picks] of picksMap) {
+      const init = initialMap.get(key) ?? 0;
+      const fin = finalMap.get(key) ?? 0;
+      const inbound = relocIn.get(key) ?? 0;
+      const outbound = relocOut.get(key) ?? 0;
+      const expected = init + inbound - outbound - picks;
+      eq(fin, expected, `identity ${key}`);
+      checked++;
+    }
+    gt(checked, 0, 'identities checked');
+    console.log(`      checked ${checked} identities`);
+  });
+});
+
+// ── summary ──────────────────────────────────────────────────────────────────
+
+console.log(`\n  ─────────────────────────────────────────`);
+console.log(`  ${passed} passed, ${failed} failed`);
+if (failures.length) {
+  console.log(`\n  Failures:`);
+  for (const f of failures) console.log(f);
+}
+process.exit(failed > 0 ? 1 : 0);

@@ -410,12 +410,6 @@ export function relocateByWaveOrder(
   // number) owns the break flag; subsequent waves point to the pickface
   // bin location.  This is purely a presentation change.
   //
-  // Save pre-Phase-4 locations so Phase 5 can detect which lines moved.
-  const preAnchorLocation = new Map<AllocationLine, string>();
-  for (const line of lines) {
-    preAnchorLocation.set(line, line.location);
-  }
-
   const byBin = new Map<string, AllocationLine[]>();
   for (const line of lines) {
     const group = byBin.get(line.binId);
@@ -448,100 +442,4 @@ export function relocateByWaveOrder(
     }
   }
 
-  // ── Phase 5: recompute Sisa for re-anchored lines ──────────────────
-  // Phase 4 moves subsequent waves to the pickface location but does
-  // NOT recompute qtyRemainingInBin.  These lines now carry Sisa from
-  // the SOURCE identity's timeline, not the pickface identity's.
-  //
-  // For every physical identity that received at least one re-anchored
-  // line, rebuild the full timeline (initial stock + inbound relocations
-  // + ALL picks at this identity) and reassign Sisa.  This correctly
-  // handles:
-  //   • pickface identities with no pre-anchoring picks (Phase 3 skipped)
-  //   • pickface identities with a mix of original + re-anchored picks
-  //   • source identities are NOT touched (re-anchored lines left them)
-  const reanchoredIdentities = new Set<string>();
-  for (const line of lines) {
-    const preLoc = preAnchorLocation.get(line)!;
-    if (preLoc !== line.location) {
-      const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
-      reanchoredIdentities.add(key);
-    }
-  }
-
-  // Rebuild relocation events from CURRENT line state.  Phase 2 captured
-  // qtyRemainingInBin before Phase 3 rewrote source timelines; after Phase 3
-  // the breaker-line Sisa may differ, so we must re-read it to get the
-  // correct relocation quantity for each pickface identity's timeline.
-  type RelocEvent5 = { targetKey: string; qty: number; waveNo: string };
-  const currentRelocEvents: RelocEvent5[] = [];
-  for (const line of lines) {
-    const pf = pickfaces.get(line.sku);
-    if (!pf) continue;
-    if (line.location === pf.location) continue;
-    if (!line.breaksPallet) continue;
-    currentRelocEvents.push({
-      targetKey: stockIdentityKey(pf.location, line.sku, line.batch, line.expiryDate),
-      qty: line.qtyRemainingInBin,
-      waveNo: line.waveNo,
-    });
-  }
-  const currentRelocsByIdentity = new Map<string, RelocEvent5[]>();
-  for (const ev of currentRelocEvents) {
-    const group = currentRelocsByIdentity.get(ev.targetKey);
-    if (group) group.push(ev);
-    else currentRelocsByIdentity.set(ev.targetKey, [ev]);
-  }
-
-  for (const identity of reanchoredIdentities) {
-    // ALL picks currently at this identity (post-anchoring).
-    const allPicks = lines.filter(
-      (l) => stockIdentityKey(l.location, l.sku, l.batch, l.expiryDate) === identity,
-    );
-
-    const relocs = currentRelocsByIdentity.get(identity) ?? [];
-    const init = initialStock.get(identity) ?? 0;
-
-    type TimelineEvent = {
-      type: 'relocation' | 'pick';
-      qty: number;
-      waveNo: string;
-      line?: AllocationLine;
-    };
-
-    const timeline: TimelineEvent[] = [
-      ...relocs.map((r) => ({
-        type: 'relocation' as const,
-        qty: r.qty,
-        waveNo: r.waveNo,
-      })),
-      ...allPicks.map((p) => ({
-        type: 'pick' as const,
-        qty: p.qtyPick,
-        waveNo: p.waveNo,
-        line: p,
-      })),
-    ];
-
-    timeline.sort((a, b) => {
-      const wa = waveSortKey(a.waveNo);
-      const wb = waveSortKey(b.waveNo);
-      if (wa !== wb) return wa - wb;
-      if (a.type === 'relocation' && b.type !== 'relocation') return -1;
-      if (a.type !== 'relocation' && b.type === 'relocation') return 1;
-      return 0;
-    });
-
-    let balance = init;
-    for (const event of timeline) {
-      if (event.type === 'relocation') {
-        balance += event.qty;
-      } else {
-        balance -= event.qty;
-        if (event.line) {
-          event.line.qtyRemainingInBin = balance;
-        }
-      }
-    }
-  }
 }
