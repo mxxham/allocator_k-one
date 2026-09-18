@@ -40,11 +40,6 @@ export function replenish(
 
   const pickfaceLocations = new Set([...pickfaces.values()].map((p) => p.location));
 
-  const pendingBySku = new Map<string, number>();
-  if (config.replenishCoverPendingDemand) {
-    for (const d of pendingDemand) pendingBySku.set(d.sku, (pendingBySku.get(d.sku) ?? 0) + d.qtyCartons);
-  }
-
   const pickfaceQty = new Map<string, number>();
   for (const bin of stockAfterPicks) {
     if (pickfaceLocations.has(bin.location)) {
@@ -71,15 +66,14 @@ export function replenish(
 
   for (const pf of ordered) {
     const currentQty = pickfaceQty.get(pf.sku) ?? 0;
-    const pending = pendingBySku.get(pf.sku) ?? 0;
-    const target = Math.max(pf.targetQtyCartons, config.replenishCoverPendingDemand ? pending : 0);
+    const target = pf.targetQtyCartons;
     let need = target - currentQty;
 
     if (need < config.replenishmentMinTriggerQty) continue;
 
     const pool = bySku.get(pf.sku) ?? [];
     const upp = pool[0]?.bin.upp || 1;
-    const reason: ReplenishmentTask['reason'] = pending > pf.targetQtyCartons ? 'PENDING_DEMAND' : 'BELOW_TARGET';
+    const reason: ReplenishmentTask['reason'] = 'BELOW_TARGET';
     let movedForThisSku = 0;
 
     while (need > 0) {
