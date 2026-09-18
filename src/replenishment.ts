@@ -128,6 +128,14 @@ export function replenish(
     }
   }
 
+  // Track stock at each pickface AFTER the main replenishment loop.
+  const currentPickfaceQty = new Map(pickfaceQty);
+  for (const t of tasks) {
+    if (t.reason === 'BELOW_TARGET') {
+      currentPickfaceQty.set(t.sku, (currentPickfaceQty.get(t.sku) ?? 0) + t.qtyMove);
+    }
+  }
+
   if (config.moveBrokenPalletToPickface) {
     const brokenLines = allocationLines.filter((l) => l.breaksPallet);
     const stockByBinId = new Map(stockAfterPicks.map((b) => [b.binId, b]));
@@ -147,8 +155,13 @@ export function replenish(
       );
       if (alreadyTasked) continue;
 
-      const pfAfter = pickfaceQty.get(line.sku) ?? 0;
+      const currentStock = currentPickfaceQty.get(line.sku) ?? 0;
+      const availableSpace = Math.max(0, pf.targetQtyCartons - currentStock);
+      if (availableSpace <= 0) continue;
+
       const upp = srcBin.upp || 1;
+      const qtyMove = Math.min(srcBin.qtyCartons, availableSpace);
+      const pickType: PickType = qtyMove >= upp ? 'PALLET' : 'CASE';
 
       tasks.push({
         sku: line.sku,
@@ -158,23 +171,26 @@ export function replenish(
         toLocation: pf.location,
         batch: srcBin.batch,
         expiryDate: srcBin.expiryDate,
-        qtyMove: srcBin.qtyCartons,
-        pickType: srcBin.qtyCartons >= upp ? 'PALLET' : 'CASE',
+        qtyMove,
+        pickType,
         upp,
         uom: srcBin.uom,
-        qtyRemainingAtSource: 0,
-        qtyAtPickfaceAfter: pfAfter + srcBin.qtyCartons,
+        qtyRemainingAtSource: srcBin.qtyCartons - qtyMove,
+        qtyAtPickfaceAfter: currentStock + qtyMove,
         daysToExpiry: daysBetween(config.asOf, srcBin.expiryDate),
         seq: 0,
         breaksPallet: false,
         reason: 'BROKEN_PALLET',
       });
 
+      // Update the tracked qty so subsequent broken pallets for the same SKU see the new total.
+      currentPickfaceQty.set(line.sku, currentStock + qtyMove);
+
       warnings.push({
         level: 'INFO',
         code: 'BROKEN_PALLET_RECOVERY',
-        message: `${srcBin.location} (${line.sku}) loose cartons moved to pickface ${pf.location} — safety rule`,
-        context: { sku: line.sku, from: srcBin.location, to: pf.location, qty: srcBin.qtyCartons },
+        message: `${srcBin.location} (${line.sku}) ${qtyMove} loose cartons moved to pickface ${pf.location} — safety rule`,
+        context: { sku: line.sku, from: srcBin.location, to: pf.location, qty: qtyMove },
       });
     }
   }
