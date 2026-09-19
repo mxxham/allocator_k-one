@@ -790,6 +790,57 @@ describe('Baseline safety — allocation decisions unchanged', () => {
   });
 });
 
+describe('550076636 real-world scenario (Sep 18 workbook)', () => {
+  it('exact Sisa flow 7 → 0 → 37 → 8 → 0 verified', async () => {
+    const config = withConfig({ asOf: new Date('2026-09-18'), minRemainingShelfLifeDays: 1, nearExpiryWarningDays: 365 });
+    const { stock, demand, stagedBySku } = await loadWorkbook('data/Warehouse_Management_System_18_September_2026_.xlsx', config);
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config, stagedBySku);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const skuLines = result.lines.filter(l => l.sku === '550076636');
+    const pf = pickfaces.get('550076636')!;
+    const key = (l: typeof result.lines[0]) => stockIdentityKey(l.location, l.sku, l.batch, l.expiryDate);
+
+    const src1 = skuLines.find(l => l.waveNo === '2' && l.location === 'CC30C01' && l.breaksPallet)!;
+    eq(src1.qtyRemainingInBin, 7, 'CC30C01 wave2 sisa=7');
+
+    const pf1 = skuLines.find(l => l.waveNo === '2' && l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-05')!;
+    eq(pf1.qtyRemainingInBin, 0, 'CC21A02 exp905 wave2 sisa=0');
+
+    const src2 = skuLines.find(l => l.waveNo === '10' && l.location === 'CC30E01' && l.breaksPallet)!;
+    eq(src2.qtyRemainingInBin, 37, 'CC30E01 wave10 sisa=37');
+
+    const pf2 = skuLines.find(l => l.waveNo === '10' && l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-02')!;
+    eq(pf2.qtyRemainingInBin, 0, 'CC21A02 exp902 wave10 sisa=0');
+
+    const src3 = skuLines.find(l => l.waveNo === '11' && l.location === 'CC33E01' && l.breaksPallet)!;
+    eq(src3.qtyRemainingInBin, 43, 'CC33E01 wave11 sisa=43');
+
+    const pf3 = skuLines.find(l => l.waveNo === '11' && l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-02')!;
+    eq(pf3.qtyRemainingInBin, 8, 'CC21A02 exp902 wave11 sisa=8');
+
+    const pf4 = skuLines.find(l => l.waveNo === '12' && l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-02')!;
+    eq(pf4.qtyRemainingInBin, 0, 'CC21A02 exp902 wave12 sisa=0');
+
+    const pfExp905Lines = skuLines.filter(l => l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-05');
+    const pfExp902Lines = skuLines.filter(l => l.location === pf.location && l.expiryDate.toISOString().slice(0, 10) === '2030-09-02');
+    gt(pfExp905Lines.length, 0, 'pickface has exp905 identity');
+    gt(pfExp902Lines.length, 0, 'pickface has exp902 identity');
+    const seen905 = new Set(pfExp905Lines.map(key));
+    const seen902 = new Set(pfExp902Lines.map(key));
+    const overlap = [...seen905].filter(k => seen902.has(k));
+    eq(overlap.length, 0, 'two expiry identities at pickface are distinct');
+
+    const ledger = relocateByWaveOrder(result.lines, pickfaces, config, stock);
+    const entry = ledger.get('550076636');
+    if (entry) {
+      eq(entry.location, pf.location, 'ledger location');
+      eq(entry.finalQty, 43, 'ledger finalQty=43');
+    }
+  });
+});
+
 // ── summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n  ─────────────────────────────────────────`);
