@@ -324,10 +324,10 @@ describe('Later pick from same identity — chronological sisa', () => {
   });
 });
 
-// ── 8. Re-anchored lines preserve Phase 3 sisa (Phase 5 removed) ───────────
+// ── 8. No relocation event → stays at source ────────────────────────
 
-describe('Re-anchored lines keep Phase 3 sisa (no Phase 5 overwrite)', () => {
-  it('wave 2 re-anchored to pickface still has sisa=20 from source bin', () => {
+describe('No relocation event → stays at source location', () => {
+  it('multiple waves at same identity with no break stay at source', () => {
     const config = makeConfig();
     const stock = [makeBin('CC01B01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
     const demand = [
@@ -339,10 +339,9 @@ describe('Re-anchored lines keep Phase 3 sisa (no Phase 5 overwrite)', () => {
     relocateByWaveOrder(result.lines, pickfaces, config, stock);
 
     const w2 = result.lines.find(l => l.waveNo === '2')!;
-    const pf = pickfaces.get('SKU6');
-    eq(w2.location, pf!.location, 'wave 2 re-anchored to pickface');
-    eq(w2.qtyRemainingInBin, 20, 'wave 2 sisa preserved from Phase 3');
-    gt(w2.qtyRemainingInBin, 0, 'wave 2 sisa positive (not recomputed at pickface)');
+    eq(w2.location, 'CC01B01', 'wave 2 stays at source (no relocation event)');
+    eq(w2.qtyRemainingInBin, 20, 'wave 2 sisa=20');
+    gt(w2.qtyRemainingInBin, 0, 'wave 2 sisa positive');
   });
 });
 
@@ -838,6 +837,73 @@ describe('550076636 real-world scenario (Sep 18 workbook)', () => {
       eq(entry.location, pf.location, 'ledger location');
       eq(entry.finalQty, 43, 'ledger finalQty=43');
     }
+  });
+});
+
+// ── 27. Non-relocated multi-wave source stays at source ──
+
+describe('Non-relocated multi-wave source stays at source', () => {
+  it('3 waves from same identity with no break: all locations stay at source, Sisa sequential', () => {
+    const config = makeConfig();
+    const stock = [makeBin('CC01A01', 'SKU-NORELOC', 'B-N1', '2030-09-01', 20, 48)];
+    const demand = [
+      makeDemand('S-N1', '1', 'SKU-NORELOC', 5, 48),
+      makeDemand('S-N2', '2', 'SKU-NORELOC', 5, 48),
+      makeDemand('S-N3', '3', 'SKU-NORELOC', 5, 48),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const lines = result.lines.filter(l => l.sku === 'SKU-NORELOC');
+    eq(lines.length, 3, 'line count');
+    for (const l of lines) {
+      eq(l.location, 'CC01A01', 'wave ' + l.waveNo + ' stays at source');
+    }
+    eq(lines[0].qtyRemainingInBin, 15, 'wave 1 sisa=15');
+    eq(lines[1].qtyRemainingInBin, 10, 'wave 2 sisa=10');
+    eq(lines[2].qtyRemainingInBin, 5, 'wave 3 sisa=5');
+    for (const l of lines) {
+      eq(l.breaksPallet, false, 'wave ' + l.waveNo + ' no break');
+    }
+  });
+});
+
+// ── 28. Relocation vs no-relocation distinction ──────────
+
+describe('Relocation vs no-relocation distinction', () => {
+  it('same source, multiple waves: with break vs without break produce different locations', () => {
+    const config = makeConfig();
+    // Source with break: pickface at CC01A01 (Level A, derived from CC30C01 bay)
+    const stockBreak = [
+      makeBin('CC30C01', 'SKU-CMP', 'B-1', '2030-06-01', 48, 48),
+      makeBin('CC01A01', 'SKU-CMP', 'B-1', '2030-06-01', 48, 48),
+    ];
+    const demandBreak = [
+      makeDemand('S-CMP1', '1', 'SKU-CMP', 5, 48),
+      makeDemand('S-CMP2', '2', 'SKU-CMP', 5, 48),
+    ];
+    const pickfacesBreak = derivePickfaces(stockBreak, config);
+    const resultBreak = allocate(stockBreak, demandBreak, config);
+    relocateByWaveOrder(resultBreak.lines, pickfacesBreak, config, stockBreak);
+
+    // Source without break: opened pallet, picks don't break
+    const stockNoBreak = [makeBin('CC30C01', 'SKU-NOCMP', 'B-1', '2030-06-01', 10, 48)];
+    const demandNoBreak = [
+      makeDemand('S-NOCMP1', '1', 'SKU-NOCMP', 5, 48),
+      makeDemand('S-NOCMP2', '2', 'SKU-NOCMP', 5, 48),
+    ];
+    const pickfacesNoBreak = derivePickfaces(stockNoBreak, config);
+    const resultNoBreak = allocate(stockNoBreak, demandNoBreak, config);
+    relocateByWaveOrder(resultNoBreak.lines, pickfacesNoBreak, config, stockNoBreak);
+
+    // Without break: both picks stay at CC30C01 (no relocation event)
+    const noBreakLines = resultNoBreak.lines.filter(l => l.sku === 'SKU-NOCMP');
+    for (const l of noBreakLines) {
+      eq(l.location, 'CC30C01', 'no-break wave ' + l.waveNo + ' stays at source');
+    }
+    eq(noBreakLines[0].qtyRemainingInBin, 5, 'no-break wave 1 sisa=5');
+    eq(noBreakLines[1].qtyRemainingInBin, 0, 'no-break wave 2 sisa=0');
   });
 });
 

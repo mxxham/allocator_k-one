@@ -398,7 +398,9 @@ export function relocateByWaveOrder(
     }
   }
 
-  // Phase 5: re-anchor break events to wave order
+  // Phase 5: re-anchor break events to wave order.
+  // A source identity with multiple waves and NO relocation event
+  // must stay at the source location — multiple waves ≠ relocation.
   const byIdentity = new Map<string, AllocationLine[]>();
   for (const line of lines) {
     const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
@@ -410,8 +412,11 @@ export function relocateByWaveOrder(
   const reAnchoredLines = new Set<AllocationLine>();
   const breakPalletLines = new Set<AllocationLine>();
 
-  for (const [, picks] of byIdentity) {
+  for (const [identity, picks] of byIdentity) {
     if (picks.length < 2) continue;
+    const relocOutEvents = relocOutByIdentity.get(identity);
+    if (!relocOutEvents || relocOutEvents.length === 0) continue;
+
     const sku = picks[0].sku;
     const pf = pickfaces.get(sku);
     if (!pf) continue;

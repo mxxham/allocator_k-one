@@ -13,9 +13,11 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "build:web": "esbuild src/web/main.ts --bundle --format=iife --target=es2020 --minify --outfile=web/bundle.js",
-    "web": "npm run build:web && npx --yes serve web -l 5173"
+    "web": "npm run build:web && npx --yes serve web -l 5173",
+    "test": "tsx src/sisa-regression.test.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "exceljs": "^4.4.0",
     "fflate": "^0.8.3",
     "jspdf": "^4.2.1",
