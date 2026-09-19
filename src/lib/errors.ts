@@ -34,6 +34,7 @@ export type WmsErrorCode =
   | 'OUTBOUND_IDENTITY_REQUIRED'
   | 'REASON_REQUIRED'
   | 'ACTOR_REQUIRED'
+  | 'ZERO_ADJUSTMENT'
   | 'DESTINATION_REQUIRED'
   | 'INVALID_STATUS'
   | 'DATABASE_ERROR';
@@ -123,6 +124,8 @@ export function toWmsError(err: unknown): WmsError {
       return new WmsError('REASON_REQUIRED', 'A reason is required for stock adjustments.', raw);
     case 'ACTOR_REQUIRED':
       return new WmsError('ACTOR_REQUIRED', 'An actor (user) is required for stock adjustments.', raw);
+    case 'ZERO_ADJUSTMENT':
+      return new WmsError('ZERO_ADJUSTMENT', 'Adjustment delta must be a non-zero integer number of cartons.', raw);
     case 'DESTINATION_REQUIRED':
       return new WmsError('DESTINATION_REQUIRED', 'Movement has no destination location.', raw);
     case 'INVALID_STATUS':
