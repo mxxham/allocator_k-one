@@ -208,6 +208,33 @@ export interface ReplenishmentResult {
   };
 }
 
+// ---- Physical inventory event model -------------------------------------
+
+/** One physical stock movement event at a specific identity. */
+export type PhysicalEvent =
+  | {
+      type: 'PICK';
+      waveNum: number;
+      qty: number;
+      line: AllocationLine;
+    }
+  | {
+      type: 'RELOC_OUT';
+      waveNum: number;
+      qty: number;
+      sourceKey: string;
+      destinationKey: string;
+      sourceLine: AllocationLine;
+    }
+  | {
+      type: 'RELOC_IN';
+      waveNum: number;
+      qty: number;
+      sourceKey: string;
+      destinationKey: string;
+      sourceLine: AllocationLine;
+    };
+
 // ---- Movement / audit report ------------------------------------------------
 
 export type MovementType = 'PICK' | 'REPLEN';

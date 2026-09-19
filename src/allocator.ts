@@ -257,33 +257,34 @@ function stockIdentityKey(location: string, sku: string, batch: string | null, e
 }
 
 /**
- * Post-allocation processing with two goals:
+ * Physical accounting event type.
  *
- * 1. **Sisa (remaining stock)** must describe the physical stock flow
- *    correctly, including stock relocated INTO a pickface bin.  For each
- *    physical inventory identity (location + SKU + batch + expiry) the
- *    ledger is:
+ * Every stock movement at a physical identity is one of:
+ *   - PICK: a customer order consumed cartons from this identity
+ *   - RELOC_IN: stock physically arrived here from a bulk source
+ *   - RELOC_OUT: the leftover stock physically left this identity for a pickface
+ */
+export type PhysicalEvent =
+  | { type: 'PICK'; waveNum: number; qty: number; line: AllocationLine }
+  | { type: 'RELOC_OUT'; waveNum: number; qty: number; sourceKey: string; destinationKey: string; sourceLine: AllocationLine }
+  | { type: 'RELOC_IN'; waveNum: number; qty: number; sourceKey: string; destinationKey: string; sourceLine: AllocationLine };
+
+/**
+ * Physical accounting using an event-driven model.
  *
- *        initial stock            (from original stock records)
- *      + inbound relocations      (pallet breaks that feed this bin)
- *      − outbound picks           (consumers picking from this bin)
- *      ─────────────────────────────────────────────────
- *      = current Sisa             (written to qtyRemainingInBin)
+ * For every physical identity (location + SKU + batch + expiry), builds a
+ * chronological timeline of PICK / RELOC_IN / RELOC_OUT events and walks
+ * the balance in wave order. At the same wave the ordering is:
  *
- *    Events are processed chronologically by wave number; at the same
- *    wave, relocations are applied before picks (the stock arrives
- *    before it is consumed).
+ *   RELOC_IN -> PICK -> RELOC_OUT
  *
- * 2. **Break-event re-anchoring**: when a bulk bin (Level B–E) is split
- *    across multiple waves, the first wave (by picklist number) owns the
- *    break event and shows the original bulk bin.  Subsequent waves show
- *    the pickface bin (since by wave order the stock has already been
- *    relocated there).
+ * This ensures:
+ *   - Destination pickface: inbound arrives before same-wave picks consume it.
+ *   - Source bulk bin: customer picks before the leftover physically leaves.
  *
- * Allocation quantities (qtyPick), source bin identity, SKU, batch,
- * demand, and FEFO selection are NEVER modified — only Sisa,
- * location (for post-break picks), and the breaksPallet flag are
- * updated.
+ * Allocation quantities (qtyPick), source-bin selection, SKU, batch, expiry,
+ * wave numbers, and picklist numbering are NEVER modified. Only Sisa
+ * (qtyRemainingInBin) and location presentation (re-anchoring) are updated.
  */
 export function relocateByWaveOrder(
   lines: AllocationLine[],
@@ -293,124 +294,114 @@ export function relocateByWaveOrder(
 ): PickfaceLedger {
   if (config.relocationOrderBasis !== 'picklistNumber') return new Map();
 
-  // ── Phase 1: read initial stock from original records ──────────────
+  // Phase 1: initial stock per physical identity
   const initialStock = new Map<string, number>();
   for (const bin of stock) {
     const key = stockIdentityKey(bin.location, bin.sku, bin.batch, bin.expiryDate);
     initialStock.set(key, (initialStock.get(key) ?? 0) + bin.qtyCartons);
   }
 
-  // ── Phase 2: identify relocation events ────────────────────────────
-  // A relocation is a pick from a NON-pickface bin where breaksPallet
-  // is true.  Stock physically moves from the bulk bin into the pickface.
-  //
-  // This scan uses the ORIGINAL breaksPallet flags — before the
-  // re-anchoring in Phase 4 changes them.
-  type RelocEvent = { targetKey: string; qty: number; waveNo: string };
+  // Phase 2: capture original values before Phase 4 re-anchoring
+  const origQtyRemaining = new Map<string, number>();
+  for (const line of lines) {
+    origQtyRemaining.set(line.binId, line.qtyRemainingInBin);
+  }
+
+  // Phase 3: build relocation events using pre-anchor values
+  type RelocEvent = {
+    sourceKey: string;
+    destinationKey: string;
+    sourceQty: number;
+    sku: string;
+    batch: string | null;
+    expiryDate: Date;
+    waveNo: string;
+    line: AllocationLine;
+  };
   const relocationEvents: RelocEvent[] = [];
 
   for (const line of lines) {
     const pf = pickfaces.get(line.sku);
     if (!pf) continue;
-    if (line.location === pf.location) continue; // already at pickface
-    if (!line.breaksPallet) continue;
-
-    const targetKey = stockIdentityKey(
-      pf.location, line.sku, line.batch, line.expiryDate,
-    );
-    relocationEvents.push({
-      targetKey,
-      qty: line.qtyRemainingInBin,
-      waveNo: line.waveNo,
-    });
+    if (line.location !== pf.location && line.breaksPallet) {
+      relocationEvents.push({
+        sourceKey: stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate),
+        destinationKey: stockIdentityKey(pf.location, line.sku, line.batch, line.expiryDate),
+        sourceQty: origQtyRemaining.get(line.binId) ?? 0,
+        sku: line.sku,
+        batch: line.batch,
+        expiryDate: line.expiryDate,
+        waveNo: line.waveNo,
+        line,
+      });
+    }
   }
 
-  // ── Phase 3: compute Sisa per physical identity ────────────────────
-  // Group picks by physical identity (location + SKU + batch + expiry).
+  // Phase 4: compute Sisa per identity via event-driven model
   const picksByIdentity = new Map<string, AllocationLine[]>();
   for (const line of lines) {
-    const key = stockIdentityKey(
-      line.location, line.sku, line.batch, line.expiryDate,
-    );
+    const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
     const group = picksByIdentity.get(key);
     if (group) group.push(line);
     else picksByIdentity.set(key, [line]);
   }
 
-  // Group relocations by target identity.
-  const relocsByIdentity = new Map<string, RelocEvent[]>();
+  const relocOutByIdentity = new Map<string, RelocEvent[]>();
+  const relocInByIdentity = new Map<string, RelocEvent[]>();
   for (const event of relocationEvents) {
-    const group = relocsByIdentity.get(event.targetKey);
-    if (group) group.push(event);
-    else relocsByIdentity.set(event.targetKey, [event]);
+    const srcGroup = relocOutByIdentity.get(event.sourceKey);
+    if (srcGroup) srcGroup.push(event);
+    else relocOutByIdentity.set(event.sourceKey, [event]);
+
+    const destGroup = relocInByIdentity.get(event.destinationKey);
+    if (destGroup) destGroup.push(event);
+    else relocInByIdentity.set(event.destinationKey, [event]);
   }
 
-  // Process every identity that has picks or inbound relocations.
   const allIdentities = new Set([
     ...picksByIdentity.keys(),
-    ...relocsByIdentity.keys(),
+    ...relocOutByIdentity.keys(),
+    ...relocInByIdentity.keys(),
   ]);
 
   for (const identity of allIdentities) {
-    const picks = picksByIdentity.get(identity);
-    const relocs = relocsByIdentity.get(identity);
-    if (!picks || picks.length === 0) continue;
+    const picks = picksByIdentity.get(identity) ?? [];
+    const relocOut = relocOutByIdentity.get(identity) ?? [];
+    const relocIn = relocInByIdentity.get(identity) ?? [];
 
-    // Start balance from the original stock record.
     let balance = initialStock.get(identity) ?? 0;
 
-    // Build a combined timeline: relocations + picks.
     type TimelineEvent = {
-      type: 'relocation' | 'pick';
+      type: 'RELOC_IN' | 'PICK' | 'RELOC_OUT';
+      waveNum: number;
       qty: number;
-      waveNo: string;
       line?: AllocationLine;
     };
-
     const timeline: TimelineEvent[] = [
-      ...(relocs ?? []).map((r) => ({
-        type: 'relocation' as const,
-        qty: r.qty,
-        waveNo: r.waveNo,
-      })),
-      ...picks.map((p) => ({
-        type: 'pick' as const,
-        qty: p.qtyPick,
-        waveNo: p.waveNo,
-        line: p,
-      })),
+      ...relocIn.map((e) => ({ type: 'RELOC_IN' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
+      ...picks.map((p) => ({ type: 'PICK' as const, waveNum: waveSortKey(p.waveNo), qty: p.qtyPick, line: p })),
+      ...relocOut.map((e) => ({ type: 'RELOC_OUT' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
     ];
 
-    // Sort chronologically by wave number; relocations before picks at
-    // the same wave (stock arrives before it is consumed).
+    const priority = { RELOC_IN: 0, PICK: 1, RELOC_OUT: 2 };
     timeline.sort((a, b) => {
-      const wa = waveSortKey(a.waveNo);
-      const wb = waveSortKey(b.waveNo);
-      if (wa !== wb) return wa - wb;
-      if (a.type === 'relocation' && b.type !== 'relocation') return -1;
-      if (a.type !== 'relocation' && b.type === 'relocation') return 1;
-      return 0;
+      if (a.waveNum !== b.waveNum) return a.waveNum - b.waveNum;
+      return priority[a.type] - priority[b.type];
     });
 
-    // Walk the timeline: relocations add to balance, picks subtract and
-    // record the resulting Sisa.
-    for (const event of timeline) {
-      if (event.type === 'relocation') {
-        balance += event.qty;
+    for (const ev of timeline) {
+      if (ev.type === 'RELOC_IN') {
+        balance += ev.qty;
+      } else if (ev.type === 'PICK') {
+        balance -= ev.qty;
+        if (ev.line) ev.line.qtyRemainingInBin = balance;
       } else {
-        balance -= event.qty;
-        if (event.line) {
-          event.line.qtyRemainingInBin = balance;
-        }
+        balance -= ev.qty;
       }
     }
   }
 
-  // ── Phase 4: re-anchor break events to wave order ──────────────────
-  // For bulk bins split across multiple waves the first wave (by wave
-  // number) owns the break flag; subsequent waves point to the pickface
-  // bin location.  This is purely a presentation change.
-  //
+  // Phase 5: re-anchor break events to wave order
   const byBin = new Map<string, AllocationLine[]>();
   for (const line of lines) {
     const group = byBin.get(line.binId);
@@ -426,7 +417,6 @@ export function relocateByWaveOrder(
     if (!pf) continue;
 
     const hasBreak = picks.some((p) => p.breaksPallet);
-
     const waveSorted = [...picks].sort(
       (a, b) => waveSortKey(a.waveNo) - waveSortKey(b.waveNo),
     );
@@ -443,28 +433,21 @@ export function relocateByWaveOrder(
     }
   }
 
+  // Phase 6: build pickface ledger from event timelines
   const ledger: PickfaceLedger = new Map();
 
   for (const [sku, pf] of pickfaces) {
     const pfLines = lines.filter((l) => l.sku === sku);
     if (pfLines.length === 0) continue;
 
-    // Initial stock in the pickface bin (from original stock records).
-    let balance = 0;
-    for (const bin of stock) {
-      if (bin.location === pf.location && bin.sku === sku) {
-        balance += bin.qtyCartons;
-      }
-    }
-
     const inboundEvents: { qty: number; waveNo: string }[] = [];
-    for (const line of pfLines) {
-      if (line.location !== pf.location && line.breaksPallet) {
-        inboundEvents.push({ qty: line.qtyRemainingInBin, waveNo: line.waveNo });
+    for (const event of relocationEvents) {
+      const destKey = stockIdentityKey(pf.location, sku, event.batch, event.expiryDate);
+      if (event.destinationKey === destKey) {
+        inboundEvents.push({ qty: event.sourceQty, waveNo: event.waveNo });
       }
     }
 
-    // Outbound picks from this pickface.
     const outboundPicks: { qty: number; waveNo: string }[] = [];
     for (const line of pfLines) {
       if (line.location === pf.location) {
@@ -472,7 +455,18 @@ export function relocateByWaveOrder(
       }
     }
 
-    // Unified timeline: relocations then picks, both in wave order.
+    let balance = 0;
+    for (const bin of stock) {
+      if (bin.location === pf.location && bin.sku === sku) {
+        const key = stockIdentityKey(bin.location, bin.sku, bin.batch, bin.expiryDate);
+        const existing = initialStock.get(key);
+        if (existing !== undefined) {
+          balance = existing;
+          break;
+        }
+      }
+    }
+
     type Ev = { type: 'reloc' | 'pick'; qty: number; waveNo: string };
     const timeline: Ev[] = [
       ...inboundEvents.map((e) => ({ type: 'reloc' as const, qty: e.qty, waveNo: e.waveNo })),
@@ -495,7 +489,7 @@ export function relocateByWaveOrder(
       }
     }
 
-    ledger.set(sku, { location: pf.location, finalQty: Math.max(0, balance) });
+    ledger.set(sku, { location: pf.location, finalQty: balance });
   }
 
   return ledger;
