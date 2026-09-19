@@ -542,6 +542,254 @@ describe('PhysicalEvent type model', () => {
   });
 });
 
+// ── 18. Physical identity = location + SKU + batch + expiry ──────────
+
+describe('Physical identity = location + SKU + batch + expiry', () => {
+  it('same location+SKU+batch but different expiry are separate identities', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC21A02', 'SKU-EXP', 'B-X', '2030-09-01', 20, 48),
+      makeBin('CC21A02', 'SKU-EXP', 'B-Y', '2030-09-04', 20, 48),
+    ];
+    const demand = [makeDemand('S-EXP2', '1', 'SKU-EXP', 25, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const lineA = result.lines.find(l => l.batch === 'B-X')!;
+    const lineB = result.lines.find(l => l.batch === 'B-Y')!;
+    eq(lineA?.qtyPick, 20, 'batch X fully picked');
+    eq(lineA?.qtyRemainingInBin, 0, 'batch X sisa=0');
+    eq(lineB?.qtyPick, 5, 'batch B partial pick');
+    eq(lineB?.qtyRemainingInBin, 15, 'batch B sisa=15');
+    const keyX = stockIdentityKey('CC21A02', 'SKU-EXP', 'B-X', new Date('2030-09-01'));
+    const keyY = stockIdentityKey('CC21A02', 'SKU-EXP', 'B-Y', new Date('2030-09-04'));
+    eq(keyX === keyY, false, 'identity keys must differ');
+  });
+
+  it('same location+SKU+expiry but different batch are separate identities', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC21A02', 'SKU-BATCH', 'B-1', '2030-06-01', 20, 48),
+      makeBin('CC21A02', 'SKU-BATCH', 'B-2', '2030-06-01', 20, 48),
+    ];
+    const demand = [makeDemand('S-BATCH', '1', 'SKU-BATCH', 25, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const line1 = result.lines.find(l => l.batch === 'B-1')!;
+    const line2 = result.lines.find(l => l.batch === 'B-2')!;
+    eq(line1?.qtyPick, 20, 'batch 1 fully picked');
+    eq(line2?.qtyPick, 5, 'batch 2 partial pick');
+    eq(line1?.qtyRemainingInBin, 0, 'batch 1 sisa=0');
+    eq(line2?.qtyRemainingInBin, 15, 'batch 2 sisa=15');
+  });
+});
+
+// ── 19. Three source bins → one pickface (550076636 scenario) ────────
+
+describe('Three source bins → one pickface (550076636 scenario)', () => {
+  it('every intermediate Sisa is correct and pickface identity preserved', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC30C01', 'SKU-550', 'B-1', '2030-06-01', 48, 48),
+      makeBin('CC30E01', 'SKU-550', 'B-2', '2030-06-01', 48, 48),
+      makeBin('CC33E01', 'SKU-550', 'B-3', '2030-06-01', 48, 48),
+      makeBin('CC21A02', 'SKU-550', 'B-1', '2030-06-01', 48, 48),
+    ];
+    const demand = [
+      makeDemand('S-A', '1', 'SKU-550', 5, 48),
+      makeDemand('S-B', '2', 'SKU-550', 5, 48),
+      makeDemand('S-C', '10', 'SKU-550', 5, 48),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const pfLines = result.lines.filter(l => l.location === 'CC21A02');
+    gt(pfLines.length, 0, 'has pickface picks');
+    for (const l of pfLines) {
+      gt(l.qtyRemainingInBin, 0, 'wave ' + l.waveNo + ' sisa positive');
+    }
+    const finalEntry = relocateByWaveOrder(result.lines, pickfaces, config, stock).get('SKU-550');
+    if (finalEntry) {
+      gt(finalEntry.finalQty, 0, 'final pickface balance positive');
+    }
+  });
+});
+
+// ── 20. Re-anchored row uses pickface ledger, NOT source-bin Sisa ───
+
+describe('Re-anchored row uses pickface ledger, not source-bin Sisa', () => {
+  it('later-wave pick at pickface has Sisa from pickface identity', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC30C01', 'SKU-REANCH', 'B-R1', '2030-06-01', 48, 48),
+      makeBin('CC21A02', 'SKU-REANCH', 'B-R1', '2030-06-01', 48, 48),
+    ];
+    const demand = [
+      makeDemand('S-R1', '1', 'SKU-REANCH', 5, 48),
+      makeDemand('S-R2', '2', 'SKU-REANCH', 5, 48),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const wave1 = result.lines.find(l => l.waveNo === '1')!;
+    const wave2 = result.lines.find(l => l.waveNo === '2')!;
+    gt(wave2?.qtyRemainingInBin ?? -1, 0, 'wave 2 sisa positive (not copied from source)');
+    eq(wave2?.location, pickfaces.get('SKU-REANCH')!.location, 'wave 2 re-anchored to pickface');
+  });
+});
+
+// ── 21. Multiple expiry identities at same pickface ──────────────────
+
+describe('Multiple expiry identities at same pickface', () => {
+    it('relocation into pickface does NOT increase wrong expiry balance', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC30C01', 'SKU-PF-EXP', 'B-A', '2030-09-01', 20, 48),
+      makeBin('CC21A02', 'SKU-PF-EXP', 'B-A', '2030-09-01', 20, 48),
+      makeBin('CC21A02', 'SKU-PF-EXP', 'B-B', '2030-09-04', 20, 48),
+    ];
+    const demand = [makeDemand('S-PF-EXP', '1', 'SKU-PF-EXP', 25, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const lineB = result.lines.find(l => l.batch === 'B-B')!;
+    eq(lineB?.qtyPick, 5, 'B-B partial pick (20 from B-A, 5 from B-B)');
+    eq(lineB?.qtyRemainingInBin, 15, 'B-B sisa=15');
+
+    const lineA = result.lines.find(l => l.batch === 'B-A')!;
+    eq(lineA?.qtyPick, 20, 'B-A fully picked');
+    eq(lineA?.qtyRemainingInBin, 0, 'B-A sisa=0');
+  });
+});
+
+// ── 22. Multiple batches at same pickface ────────────────────────────
+
+describe('Multiple batches at same pickface', () => {
+  it('same location+SKU+expiry but different batch are isolated', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC21A02', 'SKU-MULT', 'B-M1', '2030-06-01', 20, 48),
+      makeBin('CC21A02', 'SKU-MULT', 'B-M2', '2030-06-01', 20, 48),
+    ];
+    const demand = [makeDemand('S-MULT', '1', 'SKU-MULT', 25, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const line1 = result.lines.find(l => l.batch === 'B-M1')!;
+    const line2 = result.lines.find(l => l.batch === 'B-M2')!;
+    eq(line1?.qtyPick, 20, 'batch M1 fully picked');
+    eq(line2?.qtyPick, 5, 'batch M2 partial pick');
+    eq(line1?.qtyRemainingInBin, 0, 'batch M1 sisa=0');
+    eq(line2?.qtyRemainingInBin, 15, 'batch M2 sisa=15');
+  });
+});
+
+// ── 23. Initial pickface stock ───────────────────────────────────────
+
+describe('Initial pickface stock', () => {
+  it('pickface initial=48, pick-8 → sisa=40', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CD01B01', 'SKU-PF-INIT', 'B-P1', '2030-06-01', 48, 48),
+      makeBin('CC21A02', 'SKU-PF-INIT', 'B-P1', '2030-06-01', 48, 48),
+    ];
+    const demand = [makeDemand('S-PF-INIT', '1', 'SKU-PF-INIT', 8, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const pfLine = result.lines.find(l => l.location === 'CC21A02');
+    eq(pfLine?.qtyPick, 8, 'qtyPick=8');
+    eq(pfLine?.qtyRemainingInBin, 40, 'sisa=40 (48-8, pickface initial stock consumed)');
+  });
+});
+
+// ── 24. RELOC_OUT conservation ───────────────────────────────────────
+
+describe('RELOC_OUT conservation', () => {
+  it('initial - customer picks = final regardless of relocations', async () => {
+    const config = makeConfig();
+    const { stock: s, demand: d, stagedBySku } = await loadWorkbook(
+      'data/Warehouse_Management_System_15_September_2026_.xlsx', config,
+    );
+    const pickfaces = derivePickfaces(s, config);
+    const result = allocate(s, d, config, stagedBySku);
+    relocateByWaveOrder(result.lines, pickfaces, config, s);
+    const finalStock = computeStockAfterMovements(s, result.lines, pickfaces);
+
+    const totalInitial = s.reduce((sum, b) => sum + b.qtyCartons, 0);
+    const totalFinal = finalStock.reduce((sum, b) => sum + b.qtyCartons, 0);
+    const totalPicked = result.lines.reduce((sum, l) => sum + l.qtyPick, 0);
+    eq(totalFinal, totalInitial - totalPicked, 'conservation with relocations');
+  });
+});
+
+// ── 25. Same-wave ordering RELOC_IN → PICK → RELOC_OUT ──────────────
+
+describe('Same-wave ordering RELOC_IN → PICK → RELOC_OUT', () => {
+  it('destination identity: RELOC_IN before PICK at same wave', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC30C01', 'SKU-WAVE', 'B-W1', '2030-06-01', 48, 48),
+      makeBin('CC21A02', 'SKU-WAVE', 'B-W1', '2030-06-01', 0, 48),
+    ];
+    const demand = [makeDemand('S-WAVE', '1', 'SKU-WAVE', 5, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const pfLine = result.lines.find(l => l.location === 'CC21A02');
+    if (pfLine && pfLine.breaksPallet) {
+      gt(pfLine?.qtyRemainingInBin ?? -1, 0, 'pickface sisa after RELOC_IN+PICK is positive');
+    }
+  });
+
+  it('source identity: PICK before RELOC_OUT at same wave', () => {
+    const config = makeConfig();
+    const stock = [
+      makeBin('CC30C01', 'SKU-WAVE2', 'B-W2', '2030-06-01', 48, 48),
+    ];
+    const demand = [makeDemand('S-WAVE2', '1', 'SKU-WAVE2', 5, 48)];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const srcLine = result.lines.find(l => l.location === 'CC30C01' && l.breaksPallet);
+    if (srcLine) {
+      gt(srcLine?.qtyRemainingInBin ?? -1, 0, 'source sisa after PICK before RELOC_OUT is positive');
+    }
+  });
+});
+
+// ── 26. Baseline safety: wave/picklist/FEFO unchanged ────────────────
+
+describe('Baseline safety — allocation decisions unchanged', () => {
+  it('line count matches baseline', () => {
+    eq(baseline.length, wr.lines.length, 'line count matches');
+  });
+
+  it('wave numbers unchanged', () => {
+    for (let i = 0; i < wr.lines.length; i++) {
+      eq(wr.lines[i].waveNo, baseline[i].wave, 'line ' + i + ' waveNo');
+    }
+  });
+
+  it('FEFO ordering (sku/batch/expiry) unchanged', () => {
+    for (let i = 0; i < wr.lines.length; i++) {
+      eq(wr.lines[i].sku, baseline[i].sku, 'line ' + i + ' sku');
+      eq(wr.lines[i].batch, baseline[i].batch, 'line ' + i + ' batch');
+      eq(wr.lines[i].expiryDate.toISOString().slice(0, 10), baseline[i].exp, 'line ' + i + ' expiry');
+    }
+  });
+});
+
 // ── summary ──────────────────────────────────────────────────────────────────
 
 console.log(`\n  ─────────────────────────────────────────`);

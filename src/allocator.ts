@@ -1,6 +1,7 @@
 import { daysBetween, type AllocatorConfig } from './config.js';
 import { selectNextBin, toLedger, type Ledger } from './binselect.js';
 import { derivePickfaces } from './pickface.js';
+import { stockIdentityKey } from './ledger.js';
 import type {
   AllocationLine,
   AllocationResult,
@@ -247,16 +248,6 @@ function waveSortKey(waveNo: string): number {
 }
 
 /**
- * Physical inventory identity: location + SKU + batch + expiry date.
- *
- * Two stock records at the same location/SKU/batch but different expiry
- * dates are distinct inventory records and must be tracked separately.
- */
-function stockIdentityKey(location: string, sku: string, batch: string | null, expiry: Date): string {
-  return `${location}|${sku}|${batch ?? ''}|${expiry.toISOString().slice(0, 10)}`;
-}
-
-/**
  * Physical accounting event type.
  *
  * Every stock movement at a physical identity is one of:
@@ -301,10 +292,12 @@ export function relocateByWaveOrder(
     initialStock.set(key, (initialStock.get(key) ?? 0) + bin.qtyCartons);
   }
 
-  // Phase 2: capture original values before Phase 4 re-anchoring
+  // Phase 2: capture original values BEFORE any re-anchoring
+  // Keyed by physical identity (location + SKU + batch + expiry), NOT binId.
   const origQtyRemaining = new Map<string, number>();
   for (const line of lines) {
-    origQtyRemaining.set(line.binId, line.qtyRemainingInBin);
+    const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
+    origQtyRemaining.set(key, line.qtyRemainingInBin);
   }
 
   // Phase 3: build relocation events using pre-anchor values
@@ -324,10 +317,12 @@ export function relocateByWaveOrder(
     const pf = pickfaces.get(line.sku);
     if (!pf) continue;
     if (line.location !== pf.location && line.breaksPallet) {
+      const srcKey = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
+      const destKey = stockIdentityKey(pf.location, line.sku, line.batch, line.expiryDate);
       relocationEvents.push({
-        sourceKey: stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate),
-        destinationKey: stockIdentityKey(pf.location, line.sku, line.batch, line.expiryDate),
-        sourceQty: origQtyRemaining.get(line.binId) ?? 0,
+        sourceKey: srcKey,
+        destinationKey: destKey,
+        sourceQty: origQtyRemaining.get(srcKey) ?? 0,
         sku: line.sku,
         batch: line.batch,
         expiryDate: line.expiryDate,
@@ -337,7 +332,14 @@ export function relocateByWaveOrder(
     }
   }
 
-  // Phase 4: compute Sisa per identity via event-driven model
+  // Phase 4: compute Sisa per physical identity via event-driven model
+  type TimelineEvent = {
+    type: 'RELOC_IN' | 'PICK' | 'RELOC_OUT';
+    waveNum: number;
+    qty: number;
+    line?: AllocationLine;
+  };
+
   const picksByIdentity = new Map<string, AllocationLine[]>();
   for (const line of lines) {
     const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
@@ -364,6 +366,8 @@ export function relocateByWaveOrder(
     ...relocInByIdentity.keys(),
   ]);
 
+  const priority = { RELOC_IN: 0, PICK: 1, RELOC_OUT: 2 };
+
   for (const identity of allIdentities) {
     const picks = picksByIdentity.get(identity) ?? [];
     const relocOut = relocOutByIdentity.get(identity) ?? [];
@@ -371,19 +375,12 @@ export function relocateByWaveOrder(
 
     let balance = initialStock.get(identity) ?? 0;
 
-    type TimelineEvent = {
-      type: 'RELOC_IN' | 'PICK' | 'RELOC_OUT';
-      waveNum: number;
-      qty: number;
-      line?: AllocationLine;
-    };
     const timeline: TimelineEvent[] = [
       ...relocIn.map((e) => ({ type: 'RELOC_IN' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
       ...picks.map((p) => ({ type: 'PICK' as const, waveNum: waveSortKey(p.waveNo), qty: p.qtyPick, line: p })),
       ...relocOut.map((e) => ({ type: 'RELOC_OUT' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
     ];
 
-    const priority = { RELOC_IN: 0, PICK: 1, RELOC_OUT: 2 };
     timeline.sort((a, b) => {
       if (a.waveNum !== b.waveNum) return a.waveNum - b.waveNum;
       return priority[a.type] - priority[b.type];
@@ -402,38 +399,99 @@ export function relocateByWaveOrder(
   }
 
   // Phase 5: re-anchor break events to wave order
-  const byBin = new Map<string, AllocationLine[]>();
+  const byIdentity = new Map<string, AllocationLine[]>();
   for (const line of lines) {
-    const group = byBin.get(line.binId);
+    const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
+    const group = byIdentity.get(key);
     if (group) group.push(line);
-    else byBin.set(line.binId, [line]);
+    else byIdentity.set(key, [line]);
   }
 
-  for (const [, picks] of byBin) {
-    if (picks.length < 2) continue;
+  const reAnchoredLines = new Set<AllocationLine>();
+  const breakPalletLines = new Set<AllocationLine>();
 
+  for (const [, picks] of byIdentity) {
+    if (picks.length < 2) continue;
     const sku = picks[0].sku;
     const pf = pickfaces.get(sku);
     if (!pf) continue;
-
     const hasBreak = picks.some((p) => p.breaksPallet);
     const waveSorted = [...picks].sort(
       (a, b) => waveSortKey(a.waveNo) - waveSortKey(b.waveNo),
     );
-
     for (let i = 0; i < waveSorted.length; i++) {
       const pick = waveSorted[i];
       if (i === 0) {
         pick.location = picks[0].location;
         pick.breaksPallet = hasBreak;
+        if (hasBreak) breakPalletLines.add(pick);
       } else {
         pick.location = pf.location;
         pick.breaksPallet = false;
+        reAnchoredLines.add(pick);
       }
     }
   }
 
+  // Save original Sisa for re-anchored lines before recomputing
+  const originalSisa = new Map<AllocationLine, number>();
+  for (const line of reAnchoredLines) {
+    originalSisa.set(line, line.qtyRemainingInBin);
+  }
+
+  // Recompute Sisa with new locations; restore original for non-break re-anchored lines
+  const picksByIdentityAfterReanchor = new Map<string, AllocationLine[]>();
+  for (const line of lines) {
+    const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
+    const group = picksByIdentityAfterReanchor.get(key);
+    if (group) group.push(line);
+    else picksByIdentityAfterReanchor.set(key, [line]);
+  }
+
+  const allIdentitiesAfter = new Set([
+    ...picksByIdentityAfterReanchor.keys(),
+    ...relocOutByIdentity.keys(),
+    ...relocInByIdentity.keys(),
+  ]);
+
+  for (const identity of allIdentitiesAfter) {
+    const picks = picksByIdentityAfterReanchor.get(identity) ?? [];
+    const relocOut = relocOutByIdentity.get(identity) ?? [];
+    const relocIn = relocInByIdentity.get(identity) ?? [];
+    let balance = initialStock.get(identity) ?? 0;
+
+    const timeline: TimelineEvent[] = [
+      ...relocIn.map((e) => ({ type: 'RELOC_IN' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
+      ...picks.map((p) => ({ type: 'PICK' as const, waveNum: waveSortKey(p.waveNo), qty: p.qtyPick, line: p })),
+      ...relocOut.map((e) => ({ type: 'RELOC_OUT' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
+    ];
+
+    timeline.sort((a, b) => {
+      if (a.waveNum !== b.waveNum) return a.waveNum - b.waveNum;
+      return priority[a.type] - priority[b.type];
+    });
+
+    for (const ev of timeline) {
+      if (ev.type === 'RELOC_IN') {
+        balance += ev.qty;
+      } else if (ev.type === 'PICK') {
+        balance -= ev.qty;
+        if (ev.line) ev.line.qtyRemainingInBin = balance;
+      } else {
+        balance -= ev.qty;
+      }
+    }
+  }
+
+  // Restore original Sisa for re-anchored lines without relocation events
+  for (const line of reAnchoredLines) {
+    if (!breakPalletLines.has(line)) {
+      line.qtyRemainingInBin = originalSisa.get(line) ?? line.qtyRemainingInBin;
+    }
+  }
+
   // Phase 6: build pickface ledger from event timelines
+  // Aggregate ALL physical identities at the pickface, no early break
   const ledger: PickfaceLedger = new Map();
 
   for (const [sku, pf] of pickfaces) {
@@ -442,8 +500,7 @@ export function relocateByWaveOrder(
 
     const inboundEvents: { qty: number; waveNo: string }[] = [];
     for (const event of relocationEvents) {
-      const destKey = stockIdentityKey(pf.location, sku, event.batch, event.expiryDate);
-      if (event.destinationKey === destKey) {
+      if (event.destinationKey === stockIdentityKey(pf.location, sku, event.batch, event.expiryDate)) {
         inboundEvents.push({ qty: event.sourceQty, waveNo: event.waveNo });
       }
     }
@@ -455,14 +512,14 @@ export function relocateByWaveOrder(
       }
     }
 
+    // Aggregate ALL physical identities at the pickface location for this SKU
     let balance = 0;
     for (const bin of stock) {
       if (bin.location === pf.location && bin.sku === sku) {
         const key = stockIdentityKey(bin.location, bin.sku, bin.batch, bin.expiryDate);
         const existing = initialStock.get(key);
         if (existing !== undefined) {
-          balance = existing;
-          break;
+          balance += existing;
         }
       }
     }
