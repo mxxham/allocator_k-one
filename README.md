@@ -12,9 +12,11 @@ Takes the daily WMS workbook (stock on hand + `Schedule of the day`) and produce
 
 Shortages and data exceptions are reported, never silently swallowed.
 
-TypeScript / Node 20+. No framework, no database, no PHP — the engine is a
-pure function, so it drops straight into `k-one-v2` (NestJS) later without a
-rewrite. There are two ways to run it:
+TypeScript / Node 20+. No framework, no PHP — the allocation engine is a pure
+function, so it drops straight into `k-one-v2` (NestJS) later without a
+rewrite. Stock can live either in the daily WMS workbook (default) or in a
+**Supabase / PostgreSQL database** (see [Database mode](#database-mode-supabase--postgresql)).
+There are two ways to run it:
 
 **CLI** (writes files to disk):
 ```bash
@@ -162,17 +164,28 @@ src/
   movement.ts                 combines picks + replenishment into one audit ledger
   picklist.ts                 task grouping, splitting, sequencing
   pickpath.ts                 location parsing, serpentine ordering, check digit
+  ledger.ts                   physical-identity Sisa ledger (location+sku+batch+expiry)
   adapters/excel-input.ts     workbook → domain (Node/ExcelJS; column names declared here only)
   adapters/excel-output.ts    → picklist workbook (Node/ExcelJS)
   adapters/html-output.ts     → A4 print sheet (framework-agnostic, used by both CLI and web)
-  cli.ts                      Node command-line entry point
+  adapters/database-stock.ts  DB stock rows → StockBin[] (the allocator's third input adapter)
+  adapters/wms-importer.ts    workbook → import preview → initial_import RPC
+  lib/supabase.ts             server (service key) + browser (publishable key) clients
+  lib/errors.ts               pipe-delimited SQL codes → readable WmsError
+  repository/                 typed repositories — reads are selects, mutations go through RPCs
+  services/                   planning / execution / daily / reconciliation / adjustment / export
+  cli.ts                      Node command-line entry point (--db switches stock source)
+  cli-import.ts               `npm run import:wms` — preview + confirm import
   web/
     browser-input.ts          workbook → domain (browser/SheetJS, same column mapping)
     browser-output.ts         → picklist workbook (browser/SheetJS)
     main.ts                   web app: upload, run, render, download
+    ops.ts                    Ops area: inventory / inbound / outbound / execution / database
+supabase/migrations/          SQL schema, posting RPCs, RLS + reconciliation views
+tests/                        db-integration + parity suites (real PostgreSQL, loud skip)
 web/
   index.html                  the page
-  bundle.js                   built by `npm run build:web` — do not hand-edit
+  bundle.js, ops-bundle.js    built by `npm run build:web` — do not hand-edit
 ```
 
 `allocate()`, `replenish()`, and `buildPicklists()` touch no I/O and share no
@@ -182,6 +195,102 @@ ExcelJS for the CLI, browser SheetJS for the web app) so the same engine runs
 identically in both places — confirmed by running both against the same
 workbook and diffing the stats. The same engine runs against Postgres later by
 writing a third adapter that returns `StockBin[]` and `DemandLine[]`.
+
+---
+
+## Database mode (Supabase / PostgreSQL)
+
+An optional persistence layer makes PostgreSQL the **source of truth for
+stock**, while the allocator above stays byte-for-byte the same. The daily flow
+becomes:
+
+```
+WMS workbook ──import──▶ stock (DB) ──allocate──▶ waves + movements + outbound
+      (one-off)              ▲                        (all PLANNED — no stock moved)
+                             │                                │
+                    stock_transactions ◀──post_movement── warehouse executes
+                     (immutable ledger)      / complete_wave        (truck ships)
+                             │
+                       current stock ──▶ next day's allocation
+```
+
+**The five rules the whole layer is built on**
+
+- **PLANNED ≠ EXECUTED.** Planning writes `waves` (PENDING), `movements`
+  (PLANNED) and `outbound` (PLANNED). *Nothing* touches `stock`. Stock changes
+  **only** when a movement is posted or its wave completed.
+- **Physical identity = location + SKU + batch + expiry.** Two expiry dates in
+  one bin are two rows, never merged. Enforced by a trigger-maintained
+  `identity_key` (`loc|sku|batch|YYYY-MM-DD`) with a UNIQUE constraint — the
+  exact mirror of `stockIdentityKey()` in `src/ledger.ts`.
+- **Every stock change writes an immutable `stock_transactions` row**
+  (INITIAL_IMPORT / INBOUND / OUTBOUND / PICK / RELOC_IN / RELOC_OUT /
+  ADJUSTMENT). The ledger is append-only — RLS forbids UPDATE and DELETE — so
+  `stock.quantity = SUM(quantity_delta)` always holds (`stock_vs_ledger` view
+  proves it).
+- **Idempotent, atomic, never negative.** Posting is a compare-and-set on
+  status: doing it twice changes stock exactly once (`ALREADY_POSTED`). A
+  replenishment (source −N *and* destination +N) is one transaction — it either
+  fully happens or fully rolls back. Decrements are guarded, so stock can never
+  go negative.
+- **Excel is input, not truth.** The original workbook is never modified; the
+  DB→Excel export writes a new `WMS_updated_<timestamp>.xlsx`.
+
+**Tables** — `stock`, `stock_transactions`, `inbound`, `outbound`, `waves`,
+`movements`, `execution_events` (status-transition audit). All stock mutations
+run through `SECURITY DEFINER` RPCs (`post_movement`, `complete_wave`,
+`post_inbound`, `post_outbound`, `adjust_stock`, `initial_import`, …); clients
+holding the publishable key can read everything and insert/plan, but can never
+flip a row to COMPLETED or edit a quantity directly (RLS + CHECK).
+
+### Migrations
+
+Three version-controlled files under `supabase/migrations/`:
+`0001_initial_schema.sql`, `0002_posting_functions.sql`, `0003_rls_and_views.sql`.
+
+```bash
+supabase db push          # to a linked Supabase project, or
+supabase migration up     # apply pending migrations locally
+```
+
+### Setup (manual, once)
+
+1. Create a Supabase project (or any PostgreSQL 16).
+2. Apply the three migrations (`supabase db push`).
+3. Copy `.env.example` → `.env.local` and fill in `VITE_SUPABASE_URL`,
+   `VITE_SUPABASE_PUBLISHABLE_KEY` (browser-safe) and `SUPABASE_SERVICE_ROLE_KEY`
+   (server only — never `VITE_`-prefixed, never committed).
+4. Rebuild the web bundle (`npm run build:web`) — the publishable key is
+   injected at build time; the service key is never bundled.
+5. Import the opening snapshot, then run allocations from the DB:
+
+```bash
+npm run import:wms -- "data/Warehouse_Management_System_18_September_2026_.xlsx"
+npm start -- "data/….xlsx" --db --out out      # --db (or DATABASE_MODE=true) reads stock from the DB
+```
+
+The web app has an **Ops** area (Inventory / Inbound / Outbound / Execution /
+Database) that appears once the browser config is present; without it the tab
+shows a "database not configured" notice and the existing allocator flow is
+untouched.
+
+### Tests
+
+```bash
+npm test         # 40 sisa/FEFO regressions — no database needed
+npm run test:db  # 32 integration checks — requires TEST_DATABASE_URL (local postgres:16)
+npm run test:parity   # Excel-fed vs DB-fed allocation identical + 550076636 DB replay
+```
+
+`test:db` and `test:parity` create a throwaway database, apply the migrations
+from scratch, and **skip loudly** (never a false pass) when `TEST_DATABASE_URL`
+is unset. Quick local server:
+
+```bash
+docker run -d --name fefo-test -e POSTGRES_PASSWORD=test -p 54329:5432 postgres:16
+TEST_DATABASE_URL=postgres://postgres:test@localhost:54329/postgres npm run test:db
+```
+
 
 ### Configuration worth tuning
 

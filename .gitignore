@@ -6,6 +6,7 @@ dist/
 
 .vercel
 .env*
+!.env.example
 
 # Kiro session files
 .omo/
