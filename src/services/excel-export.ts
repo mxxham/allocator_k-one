@@ -1,55 +1,21 @@
 /**
  * Excel export (§34/§35) — current database stock written back to a
  * WMS-compatible workbook. The user's original workbook is NEVER overwritten:
- * exports always get a `_updated_<timestamp>` filename.
+ * exports always get a `_updated_<timestamp>` filename, and an existing
+ * target file is refused rather than replaced.
  *
- * The sheet mirrors the input layout (sheet "WMS", header on row 4, same
- * column names) so an export can be re-imported or fed to the allocator
- * without touching the parsers. Dates are written as YYYY-MM-DD strings —
- * the timezone-safe form both Excel adapters already parse.
+ * The sheet layout lives in ./stock-sheet.ts (Node-free) so the browser
+ * Ops UI can build the same workbook client-side.
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import type { DbClient } from '../lib/supabase.js';
 import { StockRepository } from '../repository/stock-repo.js';
-import { formatDbDate, type StockRecord } from '../repository/types.js';
+import type { StockRecord } from '../repository/types.js';
+import { buildStockWorkbook } from './stock-sheet.js';
 
-/** Column names must match SHEETS.stock expectations in excel-input.ts. */
-const WMS_COLUMNS = [
-  'Lokasi',
-  'item',
-  'Description',
-  'Batch',
-  'Expired Date',
-  'GR date',
-  'on hand',
-  'UPP',
-  'uom',
-  'status',
-] as const;
-
-export function buildStockSheet(records: StockRecord[]): XLSX.WorkSheet {
-  const aoa: (string | number | null)[][] = [];
-  // rows 1-3 stay empty — the WMS sheet carries its header on row 4
-  aoa.push([], [], []);
-  aoa.push([...WMS_COLUMNS]);
-  for (const r of records) {
-    aoa.push([
-      r.location,
-      r.sku,
-      r.description,
-      r.batch,
-      formatDbDate(r.expiryDate),
-      r.grDate ? formatDbDate(r.grDate) : null,
-      r.quantity,
-      r.upp,
-      r.uom,
-      'Aktif',
-    ]);
-  }
-  return XLSX.utils.aoa_to_sheet(aoa);
-}
+export { buildStockSheet, buildStockWorkbook, WMS_COLUMNS } from './stock-sheet.js';
 
 export interface ExportOptions {
   outDir?: string;
@@ -70,7 +36,7 @@ export async function exportStockToExcel(db: DbClient, opts: ExportOptions = {})
   return writeStockWorkbook(records, opts);
 }
 
-/** Write an already-loaded stock list (used by tests and the browser flow). */
+/** Write an already-loaded stock list (used by tests and the CLI). */
 export function writeStockWorkbook(records: StockRecord[], opts: ExportOptions = {}): ExportResult {
   const outDir = opts.outDir ?? '.';
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
@@ -82,12 +48,7 @@ export function writeStockWorkbook(records: StockRecord[], opts: ExportOptions =
     throw new Error(`Refusing to overwrite ${path} — exports never replace an existing workbook.`);
   }
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildStockSheet(records), 'WMS');
-  // a WMS workbook must carry all three sheets for the parsers to accept it
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[]]), 'Schedule of the day');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[]]), 'MASTER DATA');
-  XLSX.writeFile(wb, path);
+  XLSX.writeFile(buildStockWorkbook(records), path);
 
   return {
     path,

@@ -15,6 +15,10 @@ import { generatePicklistPdfs } from './adapters/pdf-output.js';
  * Usage:
  *   npx tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD]
  *                      [--min-shelf-life DAYS] [--no-split] [--no-replenish]
+ *                      [--db]
+ *
+ * --db (or DATABASE_MODE=true) switches the STOCK source from the workbook
+ * to the database; demand still comes from the workbook's schedule sheet.
  */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -37,7 +41,18 @@ async function main(): Promise<void> {
   const outDir = flag('out') ?? '.';
   const stamp = config.asOf.toISOString().slice(0, 10);
 
-  const { stock, demand, stagedBySku, warnings } = await loadWorkbook(input, config);
+  const { stock: workbookStock, demand, stagedBySku, warnings } = await loadWorkbook(input, config);
+
+  let stock = workbookStock;
+  if (argv.includes('--db') || process.env.DATABASE_MODE === 'true') {
+    const { getServerClient } = await import('./lib/supabase.js');
+    const { StockRepository } = await import('./repository/stock-repo.js');
+    const { loadStockFromDatabase } = await import('./adapters/database-stock.js');
+    const dbStock = await loadStockFromDatabase(new StockRepository(getServerClient()));
+    stock = dbStock.stock;
+    warnings.unshift(...dbStock.warnings);
+    console.log(`\nDATABASE_MODE: stock loaded from database (${stock.length} bins) — demand still from workbook.`);
+  }
 
   const pickfaces = derivePickfaces(stock, config);
 

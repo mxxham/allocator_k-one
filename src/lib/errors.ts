@@ -138,8 +138,6 @@ export function toWmsError(err: unknown): WmsError {
       return new WmsError('INVALID_STATUS', 'Inbound records are completed through the post action.', raw);
     case 'USE_POST_OUTBOUND_OR_COMPLETE_WAVE':
       return new WmsError('INVALID_STATUS', 'Outbound records are completed through the post action or by completing their wave.', raw);
-    case 'ZERO_ADJUSTMENT':
-      return new WmsError('VALIDATION_ERROR', 'Adjustment quantity cannot be zero.', raw);
     case 'INVALID_IMPORT_MODE':
       return new WmsError('VALIDATION_ERROR', `Invalid import mode: ${parts[1] ?? '?'}.`, raw);
   }

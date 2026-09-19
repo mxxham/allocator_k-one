@@ -91,13 +91,13 @@
   .kpi-value{display:block;font-family:var(--mono);font-size:1.5rem;margin:.2rem 0 .1rem;color:var(--amber);}
   .kpi-sub{display:block;font-size:.74rem;color:var(--ink-dim);}
 
-  #tabs{display:flex;gap:.2rem;border-bottom:1px solid var(--line);margin-bottom:1.1rem;overflow-x:auto;}
-  #tabs button{
+  #tabs,#opsTabs{display:flex;gap:.2rem;border-bottom:1px solid var(--line);margin-bottom:1.1rem;overflow-x:auto;}
+  #tabs button,#opsTabs button{
     background:transparent;color:var(--ink-dim);padding:.6rem 1rem;border-radius:0;
     border-bottom:2px solid transparent;white-space:nowrap;
   }
-  #tabs button.active{color:var(--ink);border-bottom-color:var(--amber);}
-  #tabs button:hover{color:var(--ink);}
+  #tabs button.active,#opsTabs button.active{color:var(--ink);border-bottom-color:var(--amber);}
+  #tabs button:hover,#opsTabs button:hover{color:var(--ink);}
 
   .panel{display:none;}
   .panel.visible{display:block;}
@@ -132,6 +132,29 @@
   }
 
   footer{max-width:1180px;margin:2.4rem auto 0;padding:1rem 2rem;color:var(--ink-faint);font-size:.76rem;border-top:1px solid var(--line);}
+
+  .mode-switch{margin-left:auto;display:flex;gap:.2rem;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;}
+  .mode-switch button{background:var(--panel);color:var(--ink-dim);padding:.4rem .9rem;font-size:.8rem;}
+  .mode-switch button.active{background:var(--amber);color:var(--amber-ink);}
+
+  #ops .ops-bar{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem;}
+  #ops .ops-bar label{font-size:.78rem;color:var(--ink-dim);display:flex;gap:.4rem;align-items:center;}
+  #ops input[type="text"], #ops input[type="date"], #ops input[type="number"], #ops select{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--ink);
+    padding:.42rem .5rem;border-radius:var(--radius);font-family:var(--mono);font-size:.82rem;
+  }
+  #ops .btn{background:var(--panel-2);color:var(--ink);border:1px solid var(--line);padding:.45rem .8rem;}
+  #ops .btn:hover:not(:disabled){border-color:var(--amber);color:var(--amber);}
+  #ops .btn.primary{background:var(--amber);color:var(--amber-ink);border-color:var(--amber);}
+  #ops .btn.danger:hover:not(:disabled){border-color:var(--bad);color:var(--bad);}
+  #ops .btn.sm{padding:.2rem .5rem;font-size:.74rem;}
+  #ops .card{margin-bottom:1rem;}
+  #ops .notice{background:#fef7e8;border:1px solid var(--amber);border-radius:var(--radius);
+    padding:.9rem 1rem;font-size:.86rem;margin-bottom:1rem;}
+  #ops pre.preview{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius);
+    padding:.8rem;font-family:var(--mono);font-size:.78rem;overflow-x:auto;white-space:pre-wrap;}
+  .adj-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.6rem;margin-top:.6rem;}
+  .adj-grid label{display:flex;flex-direction:column;gap:.25rem;font-size:.74rem;color:var(--ink-dim);}
 </style>
 </head>
 <body>
@@ -140,6 +163,10 @@
   <h1>FEFO Allocator</h1>
   <span class="rule">·</span>
   <span class="sub">Picklists, pickface replenishment &amp; movement audit for CKB Logistics</span>
+  <span class="mode-switch">
+    <button id="modeAllocator" class="active">Allocator</button>
+    <button id="modeOps">Ops</button>
+  </span>
 </header>
 
 <main>
@@ -206,6 +233,141 @@
       </div>
     </div>
   </section>
+
+  <section id="ops" hidden>
+    <div class="notice" id="opsNotConfigured" hidden>
+      Database not configured — the Ops area stays hidden until
+      <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>
+      are set at build time (see <code>.env.example</code>). The allocator above works without a database.
+    </div>
+
+    <div id="opsBody" hidden>
+      <div class="ops-bar">
+        <label>Actor <input type="text" id="opsActor" value="ops-ui" size="12" /></label>
+        <span class="status-line" id="opsStatus" data-kind="idle" style="margin:0"></span>
+      </div>
+
+      <div id="opsTabs">
+        <button data-opspanel="ops-inventory" class="active">Inventory</button>
+        <button data-opspanel="ops-inbound">Inbound</button>
+        <button data-opspanel="ops-outbound">Outbound</button>
+        <button data-opspanel="ops-execution">Execution</button>
+        <button data-opspanel="ops-database">Database</button>
+      </div>
+
+      <div id="opsPanels">
+        <div class="panel visible" id="ops-inventory">
+          <div class="ops-bar">
+            <input type="text" id="invSku" placeholder="SKU" size="12" />
+            <input type="text" id="invLocation" placeholder="Location" size="10" />
+            <button class="btn" id="invSearch">Search stock</button>
+            <button class="btn" id="invAll">Show all</button>
+          </div>
+          <div id="invTable"></div>
+          <div id="invHistory" style="margin-top:1rem"></div>
+          <div class="card" style="margin-top:1rem">
+            <h2>Stock adjustment (reason required — audited)</h2>
+            <div class="adj-grid">
+              <label>Location <input type="text" id="adjLocation" size="9" /></label>
+              <label>SKU <input type="text" id="adjSku" size="11" /></label>
+              <label>Batch <input type="text" id="adjBatch" size="9" placeholder="(blank = none)" /></label>
+              <label>Expiry <input type="date" id="adjExpiry" /></label>
+              <label>Delta (±cartons) <input type="number" id="adjDelta" value="0" /></label>
+              <label>Reason <input type="text" id="adjReason" size="20" /></label>
+            </div>
+            <button class="btn danger" id="adjSubmit" style="margin-top:.7rem">Adjust stock</button>
+          </div>
+        </div>
+
+        <div class="panel" id="ops-inbound">
+          <div class="ops-bar">
+            <label>Date <input type="date" id="inbDate" /></label>
+            <label>Status
+              <select id="inbStatus">
+                <option value="">all</option>
+                <option value="PENDING" selected>PENDING</option>
+                <option value="COMPLETED">COMPLETED</option>
+                <option value="CANCELLED">CANCELLED</option>
+              </select>
+            </label>
+            <button class="btn" id="inbRefresh">Refresh</button>
+          </div>
+          <div id="inbTable"></div>
+          <div class="card" style="margin-top:1rem">
+            <h2>Record receipt (PENDING — stock moves only on Complete)</h2>
+            <div class="adj-grid">
+              <label>Date <input type="date" id="inbNewDate" /></label>
+              <label>Reference no. <input type="text" id="inbNewRef" size="12" /></label>
+              <label>SKU <input type="text" id="inbNewSku" size="11" /></label>
+              <label>Location <input type="text" id="inbNewLocation" size="9" /></label>
+              <label>Batch <input type="text" id="inbNewBatch" size="9" /></label>
+              <label>Expiry <input type="date" id="inbNewExpiry" /></label>
+              <label>Qty (cartons) <input type="number" id="inbNewQty" min="1" value="1" /></label>
+              <label>UPP <input type="number" id="inbNewUpp" min="1" value="1" /></label>
+            </div>
+            <button class="btn primary" id="inbRecord" style="margin-top:.7rem">Record inbound</button>
+          </div>
+        </div>
+
+        <div class="panel" id="ops-outbound">
+          <div class="ops-bar">
+            <label>Date <input type="date" id="outDate" /></label>
+            <label>Status
+              <select id="outStatus">
+                <option value="">all</option>
+                <option value="PLANNED" selected>PLANNED</option>
+                <option value="COMPLETED">COMPLETED</option>
+                <option value="RESCHEDULED">RESCHEDULED</option>
+                <option value="CANCELLED">CANCELLED</option>
+              </select>
+            </label>
+            <button class="btn" id="outRefresh">Refresh</button>
+          </div>
+          <div id="outTable"></div>
+        </div>
+
+        <div class="panel" id="ops-execution">
+          <div class="ops-bar">
+            <label>Planned date <input type="date" id="execDate" /></label>
+            <button class="btn" id="execRefresh">Refresh waves</button>
+          </div>
+          <div id="execTable"></div>
+          <div id="execDetail" style="margin-top:1rem"></div>
+        </div>
+
+        <div class="panel" id="ops-database">
+          <div class="card">
+            <h2>WMS import — preview, then explicit confirm</h2>
+            <div class="ops-bar">
+              <input type="file" id="dbImportFile" accept=".xlsx,.xlsm" />
+              <label>Mode
+                <select id="dbImportMode">
+                  <option value="FAIL_ON_CONFLICT" selected>FAIL_ON_CONFLICT</option>
+                  <option value="REPLACE">REPLACE</option>
+                </select>
+              </label>
+            </div>
+            <pre class="preview" id="dbImportPreview" hidden></pre>
+            <button class="btn primary" id="dbImportConfirm" disabled>Confirm import</button>
+            <span style="font-size:.76rem;color:var(--ink-faint)">The original workbook is never modified.</span>
+          </div>
+          <div class="card">
+            <h2>Reconciliation</h2>
+            <div class="ops-bar">
+              <label>Daily summary date <input type="date" id="reconDate" /></label>
+              <button class="btn" id="reconMismatch">Stock vs ledger mismatches</button>
+              <button class="btn" id="reconSummary">Daily summary</button>
+            </div>
+            <div id="reconTable"></div>
+          </div>
+          <div class="card">
+            <h2>Export</h2>
+            <button class="btn" id="dbExport">Download current stock (WMS_updated_….xlsx)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer>
@@ -215,5 +377,6 @@
 </footer>
 
 <script src="./bundle.js"></script>
+<script src="./ops-bundle.js"></script>
 </body>
 </html>
