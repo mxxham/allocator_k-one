@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "build:web": "esbuild src/web/main.ts --bundle --format=iife --target=es2020 --minify --outfile=web/bundle.js",
     "web": "npm run build:web && npx --yes serve web -l 5173",
+    "import:wms": "tsx src/cli-import.ts",
     "test": "tsx src/sisa-regression.test.ts"
   },
   "dependencies": {
