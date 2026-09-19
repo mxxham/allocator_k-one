@@ -9,6 +9,11 @@ dist/
 
 # Kiro session files
 .omo/
+.qoder/
+
+# Baseline fixture: keep the allocation baseline, not the generated picklists
+out-baseline/*
+!out-baseline/alloc-baseline.json
 
 # Verification outputs (keep verification scripts, not outputs)
 verify-output*.txt

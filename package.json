@@ -15,7 +15,9 @@
     "build:web": "node scripts/build-web.mjs",
     "web": "npm run build:web && npx --yes serve web -l 5173",
     "import:wms": "tsx src/cli-import.ts",
-    "test": "tsx src/sisa-regression.test.ts"
+    "test": "tsx src/sisa-regression.test.ts",
+    "test:db": "tsx tests/db-integration.test.ts",
+    "test:parity": "tsx tests/parity.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

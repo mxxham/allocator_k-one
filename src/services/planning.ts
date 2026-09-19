@@ -42,6 +42,18 @@ export interface PersistPlanResult {
   counts: { picks: number; replenishments: number; breakRelocations: number };
 }
 
+/**
+ * Every record the plan would write, derived purely (no database).
+ * Movements/outbound carry waveNo but no waveId yet — ids only exist after
+ * the waves are inserted.
+ */
+export interface PlanRecords {
+  waves: NewWave[];
+  movements: NewMovement[];
+  outbound: NewOutbound[];
+  counts: { picks: number; replenishments: number; breakRelocations: number };
+}
+
 interface WaveDemandGroup {
   waveNo: string;
   shipmentNumbers: string[];
@@ -89,13 +101,13 @@ function breakRelocationFor(
   return { source: line.location, destination: pf.location, qty: line.qtyRemainingInBin };
 }
 
-export async function persistPlan(db: DbClient, input: PersistPlanInput): Promise<PersistPlanResult> {
+/** Pure derivation of the plan records (used by persistPlan and by tests). */
+export function buildPlan(input: PersistPlanInput): PlanRecords {
   const { allocation, replenishment, demand, pickfaces, asOf } = input;
-  const repos = createRepositories(db);
 
   // 1. waves (PENDING) — wave_no is a label, not chronological order
   const groups = groupWaves(demand);
-  const newWaves: NewWave[] = groups.map((g) => ({
+  const waves: NewWave[] = groups.map((g) => ({
     waveNo: g.waveNo,
     plannedDate: asOf,
     shipmentNumbers: g.shipmentNumbers,
@@ -103,8 +115,6 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
     destination: g.destination,
     plannedSlot: g.plannedSlot,
   }));
-  const waves = await repos.waves.create(newWaves);
-  const waveIdByNo = new Map(waves.map((w) => [w.waveNo, w.id]));
 
   // 2. movements (PLANNED)
   const movements: NewMovement[] = [];
@@ -142,14 +152,13 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
     else linesByWave.set(l.waveNo, [l]);
   }
   for (const [waveNo, lines] of linesByWave) {
-    const waveId = waveIdByNo.get(waveNo) ?? null;
     const sorted = [...lines].sort((a, b) => a.seq - b.seq);
     let seq = 1;
     for (const l of sorted) {
       const reloc = breakRelocationFor(l, pickfaces);
       if (reloc) {
         movements.push({
-          waveId,
+          waveId: null,
           waveNo,
           shipmentNumber: null,
           movementType: 'REPLENISH',
@@ -167,7 +176,7 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
         breakCount++;
       }
       movements.push({
-        waveId,
+        waveId: null,
         waveNo,
         shipmentNumber: l.shipmentNumber,
         movementType: 'PICK',
@@ -185,7 +194,6 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
       pickCount++;
     }
   }
-  await repos.movements.create(movements);
 
   // 3. outbound rows (PLANNED, origin=ALLOCATION) — one per shipment+SKU,
   // quantity = what was actually allocated (shortages are not shipments).
@@ -201,7 +209,7 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
     outboundByKey.set(key, {
       outboundDate: asOf,
       shipmentNumber: l.shipmentNumber,
-      waveId: waveIdByNo.get(l.waveNo) ?? null,
+      waveId: null,
       waveNo: l.waveNo,
       truck: d?.truckType ?? null,
       destination: d?.destination ?? '',
@@ -211,12 +219,37 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
       origin: 'ALLOCATION',
     });
   }
-  const outbound = await repos.outbound.create([...outboundByKey.values()]);
 
   return {
     waves,
-    movementCount: movements.length,
-    outboundCount: outbound.length,
+    movements,
+    outbound: [...outboundByKey.values()],
     counts: { picks: pickCount, replenishments: replenCount, breakRelocations: breakCount },
+  };
+}
+
+export async function persistPlan(db: DbClient, input: PersistPlanInput): Promise<PersistPlanResult> {
+  const repos = createRepositories(db);
+  const plan = buildPlan(input);
+
+  const waves = await repos.waves.create(plan.waves);
+  const waveIdByNo = new Map(waves.map((w) => [w.waveNo, w.id]));
+
+  // link movements/outbound to their freshly-created wave ids
+  for (const m of plan.movements) {
+    if (m.waveNo) m.waveId = waveIdByNo.get(m.waveNo) ?? null;
+  }
+  for (const o of plan.outbound) {
+    if (o.waveNo) o.waveId = waveIdByNo.get(o.waveNo) ?? null;
+  }
+
+  await repos.movements.create(plan.movements);
+  const outbound = await repos.outbound.create(plan.outbound);
+
+  return {
+    waves,
+    movementCount: plan.movements.length,
+    outboundCount: outbound.length,
+    counts: plan.counts,
   };
 }
