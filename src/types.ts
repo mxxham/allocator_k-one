@@ -191,6 +191,8 @@ export interface ReplenishmentShortage {
   qtyShort: number;
 }
 
+export type PickfaceLedger = Map<string, { location: string; finalQty: number }>;
+
 export interface ReplenishmentResult {
   generatedAt: Date;
   tasks: ReplenishmentTask[];

@@ -5,6 +5,7 @@ import type {
   AllocationLine,
   DemandLine,
   PickfaceAssignment,
+  PickfaceLedger,
   PickType,
   ReplenishmentResult,
   ReplenishmentShortage,
@@ -33,6 +34,7 @@ export function replenish(
   config: AllocatorConfig,
   pendingDemand: DemandLine[] = [],
   allocationLines: AllocationLine[] = [],
+  pickfaceLedger?: PickfaceLedger,
 ): ReplenishmentResult {
   const warnings: Warning[] = [];
   const tasks: ReplenishmentTask[] = [];
@@ -65,7 +67,7 @@ export function replenish(
   const ordered = [...pickfaces.values()].sort((a, b) => a.sku.localeCompare(b.sku));
 
   for (const pf of ordered) {
-    const currentQty = pickfaceQty.get(pf.sku) ?? 0;
+    const currentQty = pickfaceLedger?.get(pf.sku)?.finalQty ?? pickfaceQty.get(pf.sku) ?? 0;
     const target = pf.targetQtyCartons;
     let need = target - currentQty;
 
@@ -128,8 +130,10 @@ export function replenish(
     }
   }
 
-  // Track stock at each pickface AFTER the main replenishment loop.
-  const currentPickfaceQty = new Map(pickfaceQty);
+  const currentPickfaceQty = new Map<string, number>();
+  for (const pf of ordered) {
+    currentPickfaceQty.set(pf.sku, pickfaceLedger?.get(pf.sku)?.finalQty ?? pickfaceQty.get(pf.sku) ?? 0);
+  }
   for (const t of tasks) {
     if (t.reason === 'BELOW_TARGET') {
       currentPickfaceQty.set(t.sku, (currentPickfaceQty.get(t.sku) ?? 0) + t.qtyMove);

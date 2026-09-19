@@ -49,7 +49,7 @@ const el = {
   panels: $('#panels'),
   kpis: $('#kpis'),
   downloadXlsx: $<HTMLButtonElement>('#downloadXlsx'),
-  downloadHtml: $<HTMLButtonElement>('#downloadHtml'),
+  downloadPdf: $<HTMLButtonElement>('#downloadPdf'),
   downloadCsv: $<HTMLButtonElement>('#downloadCsv'),
   downloadAll: $<HTMLButtonElement>('#downloadAll'),
   pickfaceTable: $('#pickfaceTable'),
@@ -160,7 +160,7 @@ function renderResults(): void {
   if (!allocation || !replenishment) return;
   el.results.hidden = false;
   el.downloadXlsx.disabled = false;
-  el.downloadHtml.disabled = false;
+  el.downloadPdf.disabled = false;
   el.downloadCsv.disabled = false;
   el.downloadAll.disabled = false;
 
@@ -395,7 +395,7 @@ el.downloadXlsx.addEventListener('click', () => {
   downloadWorkbook(wb, outName('xlsx'));
 });
 
-el.downloadHtml.addEventListener('click', () => {
+el.downloadPdf.addEventListener('click', () => {
   if (!allocation) return;
   const { doc } = renderCombinedPdf(allocation, replenishment, pickfaces, config);
   const blob = doc.output('blob');

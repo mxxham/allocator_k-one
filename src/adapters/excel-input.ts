@@ -286,15 +286,19 @@ function asSku(v: unknown): string {
 }
 
 function asDate(v: unknown): Date | null {
-  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    return new Date(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate()));
+  }
   if (typeof v === 'number' && v > 20000) {
     // Excel serial date
-    return new Date(Math.round((v - 25569) * 86_400_000));
+    return new Date(Date.UTC(1900, 0, v - 25569));
   }
   const s = asString(v);
   if (!s) return null;
   const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
 }
 
 function asTime(v: unknown): string | null {

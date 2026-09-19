@@ -6,6 +6,7 @@ import type {
   AllocationResult,
   DemandLine,
   PickfaceAssignment,
+  PickfaceLedger,
   PickType,
   Shortage,
   StockBin,
@@ -289,8 +290,8 @@ export function relocateByWaveOrder(
   pickfaces: Map<string, PickfaceAssignment>,
   config: AllocatorConfig,
   stock: StockBin[],
-): void {
-  if (config.relocationOrderBasis !== 'picklistNumber') return;
+): PickfaceLedger {
+  if (config.relocationOrderBasis !== 'picklistNumber') return new Map();
 
   // ── Phase 1: read initial stock from original records ──────────────
   const initialStock = new Map<string, number>();
@@ -442,4 +443,60 @@ export function relocateByWaveOrder(
     }
   }
 
+  const ledger: PickfaceLedger = new Map();
+
+  for (const [sku, pf] of pickfaces) {
+    const pfLines = lines.filter((l) => l.sku === sku);
+    if (pfLines.length === 0) continue;
+
+    // Initial stock in the pickface bin (from original stock records).
+    let balance = 0;
+    for (const bin of stock) {
+      if (bin.location === pf.location && bin.sku === sku) {
+        balance += bin.qtyCartons;
+      }
+    }
+
+    const inboundEvents: { qty: number; waveNo: string }[] = [];
+    for (const line of pfLines) {
+      if (line.location !== pf.location && line.breaksPallet) {
+        inboundEvents.push({ qty: line.qtyRemainingInBin, waveNo: line.waveNo });
+      }
+    }
+
+    // Outbound picks from this pickface.
+    const outboundPicks: { qty: number; waveNo: string }[] = [];
+    for (const line of pfLines) {
+      if (line.location === pf.location) {
+        outboundPicks.push({ qty: line.qtyPick, waveNo: line.waveNo });
+      }
+    }
+
+    // Unified timeline: relocations then picks, both in wave order.
+    type Ev = { type: 'reloc' | 'pick'; qty: number; waveNo: string };
+    const timeline: Ev[] = [
+      ...inboundEvents.map((e) => ({ type: 'reloc' as const, qty: e.qty, waveNo: e.waveNo })),
+      ...outboundPicks.map((e) => ({ type: 'pick' as const, qty: e.qty, waveNo: e.waveNo })),
+    ];
+    timeline.sort((a, b) => {
+      const wa = waveSortKey(a.waveNo);
+      const wb = waveSortKey(b.waveNo);
+      if (wa !== wb) return wa - wb;
+      if (a.type === 'reloc' && b.type === 'pick') return -1;
+      if (a.type === 'pick' && b.type === 'reloc') return 1;
+      return 0;
+    });
+
+    for (const ev of timeline) {
+      if (ev.type === 'reloc') {
+        balance += ev.qty;
+      } else {
+        balance -= ev.qty;
+      }
+    }
+
+    ledger.set(sku, { location: pf.location, finalQty: Math.max(0, balance) });
+  }
+
+  return ledger;
 }

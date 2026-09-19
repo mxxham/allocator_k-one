@@ -1,9 +1,8 @@
-import jsPDF from 'jspdf';
-import { applyPlugin } from 'jspdf-autotable';
+import { jsPDF } from 'jspdf';
+import { autoTable } from 'jspdf-autotable';
 import { checkDigit, parseLocation, pickSequenceKey } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 
-(applyPlugin as any)(jsPDF);
 import { withConfig, type AllocatorConfig } from '../config.js';
 import type { AllocationResult, PickfaceAssignment, Picklist, ReplenishmentResult } from '../types.js';
 
@@ -203,7 +202,7 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
     ]);
   }
 
-  (doc as any).autoTable({
+  autoTable(doc, {
     startY: tableStartY,
     head,
     body,
@@ -309,7 +308,7 @@ export function renderReplenPdfPage(doc: jsPDF, replenishment: ReplenishmentResu
     '',
   ]);
 
-  (doc as any).autoTable({
+  autoTable(doc, {
     startY: currentY,
     head,
     body,
