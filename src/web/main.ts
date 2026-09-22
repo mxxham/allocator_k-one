@@ -4,7 +4,7 @@ import jsPDF from 'jspdf';
 import { allocate, relocateByWaveOrder } from '../allocator.js';
 import { computeStockAfterMovements } from '../ledger.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
-import { renderPicklistHtml } from '../adapters/html-output.js';
+import { renderBlankPicklistHtml, renderPicklistHtml } from '../adapters/html-output.js';
 import { renderPicklistPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
@@ -51,6 +51,7 @@ const el = {
   downloadPdf: $<HTMLButtonElement>('#downloadPdf'),
   downloadCsv: $<HTMLButtonElement>('#downloadCsv'),
   downloadAll: $<HTMLButtonElement>('#downloadAll'),
+  printBlankBtn: $<HTMLButtonElement>('#printBlankBtn'),
   pickfaceTable: $('#pickfaceTable'),
   pickfaceSearch: $<HTMLInputElement>('#pickfaceSearch'),
 };
@@ -400,6 +401,16 @@ el.downloadAll.addEventListener('click', () => {
 
   const zipped = zipSync(files, { level: 6 });
   triggerDownload(new Blob([zipped], { type: 'application/zip' }), `fefo_reports_${stamp}.zip`);
+});
+
+el.printBlankBtn.addEventListener('click', () => {
+  const html = renderBlankPicklistHtml();
+  const w = window.open('', '_blank');
+  if (!w) return;
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 400);
 });
 
 function movementCsvText(): string {

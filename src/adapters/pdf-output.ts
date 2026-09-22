@@ -286,3 +286,110 @@ export function generatePicklistPdfs(
 
   return pdfs;
 }
+
+// ── Blank picklist PDF rendering ────────────────────────────────────────────
+
+export function renderBlankPicklistPdf(
+  doc: jsPDF,
+  opts?: { rowCount?: number; title?: string },
+): void {
+  const geo = getPageGeometry(doc);
+  const rowCount = opts?.rowCount ?? 20;
+  const title = opts?.title ?? 'BLANK PICKLIST';
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  let y = geo.marginTop;
+
+  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.text(title, geo.marginLeft, y + 4);
+  y += 9;
+
+  const printedDate = new Date().toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Printed: ${printedDate}`, geo.marginLeft, y + 4);
+  y += 9;
+
+  // ── Table ───────────────────────────────────────────────────────────────
+  const head = [['No', 'Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '✓']];
+  const body: any[][] = [];
+  for (let i = 1; i <= rowCount; i++) {
+    body.push([String(i), '', '', '', '', '', '', '', '', '', '']);
+  }
+
+  autoTable(doc, {
+    startY: y,
+    head,
+    body,
+    theme: 'grid',
+    pageBreak: 'auto',
+    rowPageBreak: 'auto',
+    showHead: 'everyPage',
+    margin: {
+      left: geo.marginLeft,
+      right: geo.marginRight,
+      top: y,
+      bottom: SIGNATURE_BLOCK_HEIGHT,
+    },
+    styles: {
+      fontSize: 10,
+      cellPadding: 1.5,
+      textColor: [0, 0, 0],
+      lineWidth: 0.2,
+      lineColor: [0, 0, 0],
+      overflow: 'linebreak',
+    },
+    headStyles: {
+      fillColor: [255, 255, 255],
+      textColor: [0, 0, 0],
+      fontStyle: 'bold',
+      fontSize: 10,
+      lineWidth: 0.2,
+      lineColor: [0, 0, 0],
+    },
+    alternateRowStyles: {
+      fillColor: [240, 240, 240],
+    },
+    columnStyles: {
+      1: { fontStyle: 'bold' },
+      3: { overflow: 'linebreak' },
+      4: { fontStyle: 'bold' },
+      7: { halign: 'right' },
+      9: { halign: 'right' },
+      10: { halign: 'center' },
+    },
+    didDrawPage() {
+      let pageY = geo.marginTop;
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(title, geo.marginLeft, pageY + 4);
+      pageY += 9;
+
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Printed: ${printedDate}`, geo.marginLeft, pageY + 4);
+    },
+  });
+
+  const finalY = (doc as any).lastAutoTable?.finalY ?? y + 20;
+  drawSignatures(doc, finalY, geo);
+}
+
+export function generateBlankPicklistPdf(
+  opts?: { rowCount?: number; title?: string },
+): { name: string; data: Uint8Array }[] {
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  renderBlankPicklistPdf(doc, opts);
+  stampPageNumbers(doc);
+  const data = new Uint8Array(doc.output('arraybuffer'));
+  const name = `blank_picklist_${Date.now()}.pdf`;
+  return [{ name, data }];
+}
