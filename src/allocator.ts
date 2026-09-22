@@ -446,10 +446,17 @@ export function relocateByWaveOrder(
     const relocOutEvents = relocOutByIdentity.get(identity);
     if (!relocOutEvents || relocOutEvents.length === 0) continue;
 
+    // Only re-anchor subsequent waves when the relocation was triggered by
+    // a pallet break. Non-break relocs (already-open bins with remaining
+    // stock) still generate a RELOC_OUT event for the physical stock move,
+    // but the picker keeps picking from the original source bin — re-anchoring
+    // to a virtual/derived pickface with no stock would be wrong.
+    const hasPalletBreak = relocOutEvents.some((e) => e.line.breaksPallet);
+    if (!hasPalletBreak) continue;
+
     const sku = picks[0].sku;
     const pf = pickfaces.get(sku);
     if (!pf) continue;
-    const hasRemainder = picks.some((p) => p.qtyRemainingInBin > 0);
     const waveSorted = [...picks].sort(
       (a, b) => waveSortKey(a.waveNo) - waveSortKey(b.waveNo),
     );
@@ -497,7 +504,9 @@ export function relocateByWaveOrder(
     const timeline: TimelineEvent[] = [
       ...relocIn.map((e) => ({ type: 'RELOC_IN' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
       ...picks.map((p) => ({ type: 'PICK' as const, waveNum: waveSortKey(p.waveNo), qty: p.qtyPick, line: p })),
-      ...relocOut.map((e) => ({ type: 'RELOC_OUT' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
+      ...relocOut
+        .filter((e) => e.line.breaksPallet)
+        .map((e) => ({ type: 'RELOC_OUT' as const, waveNum: waveSortKey(e.waveNo), qty: e.sourceQty })),
     ];
 
     timeline.sort((a, b) => {
