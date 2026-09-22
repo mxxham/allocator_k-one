@@ -46,10 +46,10 @@ export function buildPicklists(
 
     const handpick = rawLines
       .filter((l) => l.pickType === 'CASE')
-      .sort((a, b) => seqOf(a, config) - seqOf(b, config));
+      .sort((a, b) => a.sku.localeCompare(b.sku) || seqOf(a, config) - seqOf(b, config));
     const forklift = rawLines
       .filter((l) => l.pickType !== 'CASE')
-      .sort((a, b) => seqOf(a, config) - seqOf(b, config));
+      .sort((a, b) => a.sku.localeCompare(b.sku) || seqOf(a, config) - seqOf(b, config));
     const sorted = [...handpick, ...forklift];
 
     const chunks = config.maxLinesPerPicklist > 0 ? chunk(sorted, config.maxLinesPerPicklist) : [sorted];

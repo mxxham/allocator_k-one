@@ -5,16 +5,15 @@ import { allocate, relocateByWaveOrder } from '../allocator.js';
 import { computeStockAfterMovements } from '../ledger.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import { renderPicklistHtml } from '../adapters/html-output.js';
-import { renderPicklistPdfPage, renderReplenPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
+import { renderPicklistPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
 import { buildPicklists, formatQty, uomLabel } from '../picklist.js';
-import { replenish, sequenceReplenishment } from '../replenishment.js';
+import { detectDoubles, type DoubleEntry } from '../double.js';
 import type {
   AllocationResult,
   MovementRow,
   PickfaceAssignment,
-  ReplenishmentResult,
   StockBin,
 } from '../types.js';
 import { loadWorkbookFromBuffer, type LoadedData } from './browser-input.js';
@@ -26,8 +25,8 @@ let loaded: LoadedData | null = null;
 let stock: StockBin[] = [];
 let pickfaces: Map<string, PickfaceAssignment> = new Map();
 let allocation: AllocationResult | null = null;
-let replenishment: ReplenishmentResult | null = null;
 let movement: MovementRow[] = [];
+let doubles: { pickDoubles: DoubleEntry[]; total: number } | null = null;
 let config: AllocatorConfig | null = null;
 let fileName = '';
 
@@ -41,7 +40,6 @@ const el = {
   minShelfLife: $<HTMLInputElement>('#minShelfLife'),
   targetQty: $<HTMLSelectElement>('#targetQty'),
   splitTasks: $<HTMLInputElement>('#splitTasks'),
-  coverPending: $<HTMLInputElement>('#coverPending'),
   runBtn: $<HTMLButtonElement>('#runBtn'),
   status: $('#status'),
   results: $('#results'),
@@ -126,7 +124,6 @@ function buildConfig(): AllocatorConfig {
     asOf: el.asOf.valueAsDate ?? new Date(),
     minRemainingShelfLifeDays: Number(el.minShelfLife.value) || 0,
     splitPalletAndCaseTasks: el.splitTasks.checked,
-    replenishCoverPendingDemand: el.coverPending.checked,
     pickfaceTargetQty: el.targetQty.value === 'upp' ? 'upp' : Number(el.targetQty.value),
   });
 }
@@ -146,10 +143,8 @@ function run(buf: ArrayBuffer): void {
   // Use computeStockAfterMovements to account for picks AND relocations
   const stockAfterMovements = computeStockAfterMovements(loaded.stock, allocation.lines, pickfaces);
 
-  replenishment = replenish(stockAfterMovements, pickfaces, config, loaded.demand, allocation.lines);
-  replenishment.tasks = sequenceReplenishment(replenishment.tasks);
-
-  movement = buildMovementReport(allocation, replenishment);
+  movement = buildMovementReport(allocation);
+  doubles = detectDoubles(allocation);
 
   renderResults();
 }
@@ -157,7 +152,7 @@ function run(buf: ArrayBuffer): void {
 // ---- rendering --------------------------------------------------------------
 
 function renderResults(): void {
-  if (!allocation || !replenishment) return;
+  if (!allocation) return;
   el.results.hidden = false;
   el.downloadXlsx.disabled = false;
   el.downloadPdf.disabled = false;
@@ -165,20 +160,18 @@ function renderResults(): void {
   el.downloadAll.disabled = false;
 
   const s = allocation.stats;
-  const r = replenishment.stats;
   el.kpis.innerHTML = [
     kpi('Fill rate', `${s.fillRatePct.toFixed(1)}%`, `${s.cartonsAllocated} / ${s.cartonsRequested} ctn`),
     kpi('Picklists', String(allocation.picklists.length), `${s.palletPicks} pallet · ${s.casePicks} case`),
     kpi('Shortages', String(allocation.shortages.length), 'outbound lines short'),
-    kpi('Replenishment', String(replenishment.tasks.length), `${r.cartonsMoved} ctn moved`),
-    kpi('Pallets opened', String(s.palletsBroken + r.palletsBroken), 'picking + replen'),
+    kpi('Pallets opened', String(s.palletsBroken), 'sealed pallets broken'),
   ].join('');
 
   renderPicklistTab();
   renderShortageTab();
-  renderReplenishmentTab();
   renderMovementTab();
   renderExceptionsTab();
+  renderDoubleTab();
   renderPickfaceTable();
 
   const firstTab = el.tabs.querySelector('button');
@@ -235,31 +228,7 @@ function renderPicklistTab(): void {
     )
     .join('');
 
-  let replenSection = '';
-  if (replenishment && replenishment.tasks.length > 0) {
-    const sorted = [...replenishment.tasks].sort((a, b) => a.seq - b.seq);
-    replenSection = `<details class="pl-card" open>
-      <summary><span class="pl-id">REPLENISHMENT</span>
-        <span class="pl-meta">Bin to Bin · ${replenishment.stats.cartonsMoved} ctn · ${replenishment.tasks.length} moves</span></summary>
-      ${table(
-        ['#', 'Dari Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp', 'Qty', 'UOM', 'Sisa'],
-        sorted.map((t) => [
-          t.seq,
-          `<span style="background:#e8f0fe;padding:1px 4px">${t.fromLocation}</span>`,
-          t.sku,
-          escapeHtml(t.description),
-          `<span style="background:#e8f0fe;padding:1px 4px;font-weight:700;color:#1f3864">${t.toLocation}</span>`,
-          t.batch ?? '-',
-          dateStr(t.expiryDate),
-          t.qtyMove,
-          uomLabel(t.uom),
-          t.qtyRemainingAtSource,
-        ]),
-      )}
-    </details>`;
-  }
-
-  p.innerHTML = (groups || '<p class="empty">No picklists generated.</p>') + replenSection;
+  p.innerHTML = groups || '<p class="empty">No picklists generated.</p>';
 }
 
 function renderShortageTab(): void {
@@ -281,33 +250,6 @@ function renderShortageTab(): void {
 
 function reasonLabel(r: string): string {
   return { ALREADY_STAGED: 'Already in staging', BLOCKED_SHELF_LIFE: 'Blocked by shelf life', NO_STOCK: 'No stock' }[r] ?? r;
-}
-
-function renderReplenishmentTab(): void {
-  const p = panel('panel-replenishment');
-  const tasks = table(
-    ['#', 'Material', 'Description', 'From', 'To pickface', 'Batch', 'Exp', 'Qty', 'UOM', 'Reason'],
-    replenishment!.tasks.map((t) => [
-      t.seq,
-      t.sku,
-      escapeHtml(t.description),
-      t.fromLocation,
-      t.toLocation,
-      t.batch ?? '-',
-      dateStr(t.expiryDate),
-      t.qtyMove,
-      uomLabel(t.uom),
-      t.reason === 'PENDING_DEMAND' ? 'Covers order' : t.reason === 'BROKEN_PALLET' ? 'Buka palet' : 'Below target',
-    ]),
-    'No pickface is below its target level.',
-  );
-  const shortages = replenishment!.shortages.length
-    ? `<h3>Replenishment shortages</h3>${table(
-        ['Material', 'Description', 'Pickface', 'Needed', 'Moved', 'Short'],
-        replenishment!.shortages.map((s) => [s.sku, escapeHtml(s.description), s.toLocation, s.qtyNeeded, s.qtyMoved, s.qtyShort]),
-      )}`
-    : '';
-  p.innerHTML = tasks + shortages;
 }
 
 function renderMovementTab(): void {
@@ -340,6 +282,41 @@ function renderExceptionsTab(): void {
   );
 }
 
+function renderDoubleTab(): void {
+  const p = panel('panel-double');
+  if (!doubles || doubles.total === 0) {
+    p.innerHTML = '<p class="empty">No double movements detected — each bin touched only once.</p>';
+    return;
+  }
+
+  const sections: string[] = [];
+
+  if (doubles.pickDoubles.length > 0) {
+    const rows = doubles.pickDoubles.map((d) => {
+      const movements = d.movements.map((m) =>
+        `<span class="tag tag-pick">PICK</span> #${m.seq} ${m.qty} ctn → ${m.toLocation}`
+      ).join(' ');
+      return [
+        `<span style="color:#1f3864;font-weight:700">${d.location}</span>`,
+        d.sku,
+        escapeHtml(d.description),
+        d.batch ?? '-',
+        dateStr(d.expiryDate),
+        `<span style="color:var(--bad);font-weight:700">${d.totalQty}</span>`,
+        `<span style="font-size:.76rem;color:var(--ink-dim)">${movements}</span>`,
+      ];
+    });
+    sections.push(`<h3 style="margin-bottom:.5rem">Double Picks <span class="tag tag-error">${doubles.pickDoubles.length}</span></h3>`);
+    sections.push(table(
+      ['Location', 'Material', 'Description', 'Batch', 'Exp', 'Total Qty', 'Details'],
+      rows,
+      'No double picks.',
+    ));
+  }
+
+  p.innerHTML = sections.join('');
+}
+
 function renderPickfaceTable(filter = ''): void {
   const rows = [...pickfaces.values()]
     .filter((p) => !filter || p.sku.includes(filter) || p.description.toLowerCase().includes(filter.toLowerCase()))
@@ -366,7 +343,6 @@ el.tabs.addEventListener('click', (e) => {
 
 function renderCombinedPdf(
   alloc: AllocationResult,
-  repl: ReplenishmentResult | null,
   pf: Map<string, PickfaceAssignment>,
   cfg: AllocatorConfig | null,
 ): { doc: jsPDF; pageRanges: PdfPageRange[] } {
@@ -379,10 +355,6 @@ function renderCombinedPdf(
     const endPage = doc.getNumberOfPages();
     pageRanges.push({ startPage, endPage });
   }
-  if (repl && repl.tasks.length > 0) {
-    doc.addPage();
-    renderReplenPdfPage(doc, repl, cfg ?? withConfig());
-  }
   stampPageNumbers(doc, pageRanges);
   return { doc, pageRanges };
 }
@@ -391,13 +363,13 @@ function renderCombinedPdf(
 
 el.downloadXlsx.addEventListener('click', () => {
   if (!allocation) return;
-  const wb = buildWorkbook(allocation, replenishment ?? undefined, movement, pickfaces, config ?? undefined);
+  const wb = buildWorkbook(allocation, movement, pickfaces);
   downloadWorkbook(wb, outName('xlsx'));
 });
 
 el.downloadPdf.addEventListener('click', () => {
   if (!allocation) return;
-  const { doc } = renderCombinedPdf(allocation, replenishment, pickfaces, config);
+  const { doc } = renderCombinedPdf(allocation, pickfaces, config);
   const blob = doc.output('blob');
   triggerDownload(blob, outName('pdf'));
 });
@@ -408,13 +380,13 @@ el.downloadCsv.addEventListener('click', () => {
 });
 
 el.downloadAll.addEventListener('click', () => {
-  if (!allocation || !replenishment) return;
+  if (!allocation) return;
   const stamp = el.asOf.value || dateStr(new Date());
-  const wb = buildWorkbook(allocation, replenishment, movement, pickfaces, config ?? undefined);
+  const wb = buildWorkbook(allocation, movement, pickfaces);
   const xlsxBytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
   const csv = movementCsvText();
 
-  const { doc } = renderCombinedPdf(allocation, replenishment, pickfaces, config);
+  const { doc } = renderCombinedPdf(allocation, pickfaces, config);
   const pdfBytes = new Uint8Array(doc.output('arraybuffer'));
 
   const files: Record<string, Uint8Array> = {

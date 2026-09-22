@@ -1,10 +1,10 @@
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
-import { checkDigit, parseLocation, pickSequenceKey } from '../pickpath.js';
+import { checkDigit } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 
 import { withConfig, type AllocatorConfig } from '../config.js';
-import type { AllocationResult, PickfaceAssignment, Picklist, ReplenishmentResult } from '../types.js';
+import type { AllocationResult, PickfaceAssignment, Picklist } from '../types.js';
 
 function escape(s: string): string {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] as string);
@@ -75,7 +75,11 @@ function picklistHeaderHeight(doc: jsPDF, pl: Picklist, geo: PageGeometry): numb
 
   const doText = pl.orderNos.length ? pl.orderNos.join(', ') : '-';
   const doLines = wrapText(doc, `DO Number: ${doText}`, geo.contentWidth);
-  h += doLines.length * 5 + 4;
+  h += doLines.length * 5 + 1;
+
+  const printedDate = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const printedLines = wrapText(doc, `Printed: ${printedDate}`, geo.contentWidth);
+  h += printedLines.length * 5 + 4;
 
   return h;
 }
@@ -117,6 +121,10 @@ function drawPicklistHeader(doc: jsPDF, pl: Picklist, geo: PageGeometry): void {
     doc.text(line, geo.marginLeft, y + 4);
     y += 5;
   }
+  y += 1;
+
+  const printedDate = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  doc.text(`Printed: ${printedDate}`, geo.marginLeft, y + 4);
 }
 
 function drawSignatures(doc: jsPDF, finalY: number, geo: PageGeometry): void {
@@ -165,10 +173,7 @@ export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void 
 // ── Picklist column widths (A4 landscape content = 268mm) ────────────────────
 
 const PICKLIST_COL_WIDTHS = [10, 30, 22, 50, 26, 20, 20, 14, 20, 12, 10] as const;
-
-// ── Replenishment column widths (same layout) ───────────────────────────────
-
-const REPLEN_COL_WIDTHS = [10, 30, 22, 50, 26, 20, 20, 14, 20, 12, 10] as const;
+// idx:  0-No  1-Lokasi  2-Material  3-Description  4-DO  5-BinToBin  6-Batch  7-ExpDate  8-QtyPick  9-UOM  10-Sisa  11-✓
 
 // ── Picklist PDF rendering ──────────────────────────────────────────────────
 
@@ -233,17 +238,12 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
       lineColor: [0, 0, 0],
     },
     columnStyles: {
-      0: { cellWidth: PICKLIST_COL_WIDTHS[0] },
-      1: { cellWidth: PICKLIST_COL_WIDTHS[1], fontStyle: 'bold' },
-      2: { cellWidth: PICKLIST_COL_WIDTHS[2] },
-      3: { cellWidth: PICKLIST_COL_WIDTHS[3], overflow: 'linebreak' },
-      4: { cellWidth: PICKLIST_COL_WIDTHS[4], fontStyle: 'bold' },
-      5: { cellWidth: PICKLIST_COL_WIDTHS[5] },
-      6: { cellWidth: PICKLIST_COL_WIDTHS[6] },
-      7: { cellWidth: PICKLIST_COL_WIDTHS[7], halign: 'right' },
-      8: { cellWidth: PICKLIST_COL_WIDTHS[8] },
-      9: { cellWidth: PICKLIST_COL_WIDTHS[9], halign: 'right' },
-      10: { cellWidth: PICKLIST_COL_WIDTHS[10], halign: 'center' },
+      1: { fontStyle: 'bold' },
+      3: { overflow: 'linebreak' },
+      4: { fontStyle: 'bold' },
+      7: { halign: 'right' },
+      9: { halign: 'right' },
+      10: { halign: 'center' },
     },
     didDrawPage() {
       drawPicklistHeader(doc, pl, geo);
@@ -263,106 +263,10 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
   drawSignatures(doc, finalY, geo);
 }
 
-// ── Replenishment PDF rendering ─────────────────────────────────────────────
-
-export function renderReplenPdfPage(doc: jsPDF, replenishment: ReplenishmentResult, config: AllocatorConfig) {
-  const geo = getPageGeometry(doc);
-
-  const sorted = [...replenishment.tasks].sort((a, b) => {
-    const pa = parseLocation(a.fromLocation);
-    const pb = parseLocation(b.fromLocation);
-    const ka = pa ? pickSequenceKey(pa, config) : Number.MAX_SAFE_INTEGER;
-    const kb = pb ? pickSequenceKey(pb, config) : Number.MAX_SAFE_INTEGER;
-    return ka - kb;
-  });
-
-  let currentY = geo.marginTop;
-
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text('REPLENISHMENT (Bin to Bin)', geo.marginLeft, currentY + 4);
-  currentY += 9;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  const subText = `Total: ${replenishment.stats.cartonsMoved} ctn / ${replenishment.tasks.length} moves`;
-  const subLines = wrapText(doc, subText, geo.contentWidth);
-  for (const line of subLines) {
-    doc.text(line, geo.marginLeft, currentY + 4);
-    currentY += 5;
-  }
-  currentY += 4;
-
-  const head = [['No', 'Dari Lokasi', 'Material', 'Description', 'Bin To Bin', 'Batch', 'Exp Date', 'Qty', 'UOM', 'Sisa', '✓']];
-  const body = sorted.map((t, i) => [
-    String(i + 1),
-    t.fromLocation,
-    t.sku,
-    escape(t.description),
-    t.toLocation,
-    t.batch ?? '-',
-    t.expiryDate.toISOString().slice(0, 10),
-    String(t.qtyMove),
-    `${uomLabel(t.uom)}${t.breaksPallet ? ' buka palet' : ''}`,
-    String(t.qtyRemainingAtSource),
-    '',
-  ]);
-
-  autoTable(doc, {
-    startY: currentY,
-    head,
-    body,
-    theme: 'grid',
-    pageBreak: 'auto',
-    rowPageBreak: 'auto',
-    showHead: 'everyPage',
-    margin: { left: geo.marginLeft, right: geo.marginRight },
-    styles: {
-      fontSize: 10,
-      cellPadding: 1.5,
-      textColor: [0, 0, 0],
-      lineWidth: 0.2,
-      lineColor: [0, 0, 0],
-      overflow: 'linebreak',
-    },
-    headStyles: {
-      fillColor: [255, 255, 255],
-      textColor: [0, 0, 0],
-      fontStyle: 'bold',
-      fontSize: 10,
-      lineWidth: 0.2,
-      lineColor: [0, 0, 0],
-    },
-    columnStyles: {
-      0: { cellWidth: REPLEN_COL_WIDTHS[0] },
-      1: { cellWidth: REPLEN_COL_WIDTHS[1], fontStyle: 'bold' },
-      2: { cellWidth: REPLEN_COL_WIDTHS[2] },
-      3: { cellWidth: REPLEN_COL_WIDTHS[3], overflow: 'linebreak' },
-      4: { cellWidth: REPLEN_COL_WIDTHS[4], fontStyle: 'bold' },
-      5: { cellWidth: REPLEN_COL_WIDTHS[5] },
-      6: { cellWidth: REPLEN_COL_WIDTHS[6] },
-      7: { cellWidth: REPLEN_COL_WIDTHS[7], halign: 'right' },
-      8: { cellWidth: REPLEN_COL_WIDTHS[8] },
-      9: { cellWidth: REPLEN_COL_WIDTHS[9], halign: 'right' },
-      10: { cellWidth: REPLEN_COL_WIDTHS[10], halign: 'center' },
-    },
-    didDrawCell(data: any) {
-      if (data.column.index === 10 && data.section === 'body') {
-        const { x, y, width, height } = data.cell;
-        const size = Math.min(width, height) * 0.5;
-        const cx = x + width / 2 - size / 2;
-        const cy = y + height / 2 - size / 2;
-        doc.rect(cx, cy, size, size);
-      }
-    },
-  });
-}
-
 // ── Generate all picklist PDFs ──────────────────────────────────────────────
 
 export function generatePicklistPdfs(
   result: AllocationResult,
-  replenishment?: ReplenishmentResult,
   config?: AllocatorConfig,
   pickfaces?: Map<string, PickfaceAssignment>,
 ): { name: string; data: Uint8Array }[] {
@@ -376,14 +280,6 @@ export function generatePicklistPdfs(
     const data = new Uint8Array(doc.output('arraybuffer'));
     const name = `picklist_${pl.picklistId}.pdf`;
     pdfs.push({ name, data });
-  }
-
-  if (replenishment && replenishment.tasks.length > 0) {
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-    renderReplenPdfPage(doc, replenishment, cfg);
-    stampPageNumbers(doc);
-    const data = new Uint8Array(doc.output('arraybuffer'));
-    pdfs.push({ name: 'replenishment.pdf', data });
   }
 
   return pdfs;

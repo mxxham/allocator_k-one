@@ -17,7 +17,6 @@ import type {
   AllocationResult,
   DemandLine,
   PickfaceAssignment,
-  ReplenishmentResult,
 } from '../types.js';
 import { createRepositories } from '../repository/index.js';
 import type { NewMovement } from '../repository/movement-repo.js';
@@ -27,8 +26,6 @@ import type { WaveRecord } from '../repository/types.js';
 
 export interface PersistPlanInput {
   allocation: AllocationResult;
-  /** optional — pass the run's replenishment result to persist its tasks */
-  replenishment?: ReplenishmentResult;
   demand: DemandLine[];
   pickfaces: Map<string, PickfaceAssignment>;
   asOf: Date;
@@ -38,8 +35,8 @@ export interface PersistPlanResult {
   waves: WaveRecord[];
   movementCount: number;
   outboundCount: number;
-  /** PICK / REPLENISH (replenishment tasks) / REPLENISH (pallet-break relocations) */
-  counts: { picks: number; replenishments: number; breakRelocations: number };
+  /** PICK / REPLENISH (pallet-break relocations) */
+  counts: { picks: number; breakRelocations: number };
 }
 
 /**
@@ -51,7 +48,7 @@ export interface PlanRecords {
   waves: NewWave[];
   movements: NewMovement[];
   outbound: NewOutbound[];
-  counts: { picks: number; replenishments: number; breakRelocations: number };
+  counts: { picks: number; breakRelocations: number };
 }
 
 interface WaveDemandGroup {
@@ -103,7 +100,7 @@ function breakRelocationFor(
 
 /** Pure derivation of the plan records (used by persistPlan and by tests). */
 export function buildPlan(input: PersistPlanInput): PlanRecords {
-  const { allocation, replenishment, demand, pickfaces, asOf } = input;
+  const { allocation, demand, pickfaces, asOf } = input;
 
   // 1. waves (PENDING) — wave_no is a label, not chronological order
   const groups = groupWaves(demand);
@@ -119,29 +116,7 @@ export function buildPlan(input: PersistPlanInput): PlanRecords {
   // 2. movements (PLANNED)
   const movements: NewMovement[] = [];
 
-  // 2a. pickface replenishment tasks run ahead of the waves — no wave link
-  let replenCount = 0;
-  for (const t of replenishment?.tasks ?? []) {
-    movements.push({
-      waveId: null,
-      waveNo: null,
-      shipmentNumber: null,
-      movementType: 'REPLENISH',
-      sku: t.sku,
-      description: t.description,
-      sourceLocation: t.fromLocation,
-      destinationLocation: t.toLocation,
-      batch: t.batch,
-      expiryDate: t.expiryDate,
-      quantity: t.qtyMove,
-      pickType: t.pickType,
-      breaksPallet: t.breaksPallet,
-      seq: t.seq,
-    });
-    replenCount++;
-  }
-
-  // 2b. picks per wave, in travel order; a pallet-break relocation is emitted
+  // 2a. picks per wave, in travel order; a pallet-break relocation is emitted
   // immediately BEFORE its pick so later picks from the pickface find stock.
   let pickCount = 0;
   let breakCount = 0;
@@ -224,7 +199,7 @@ export function buildPlan(input: PersistPlanInput): PlanRecords {
     waves,
     movements,
     outbound: [...outboundByKey.values()],
-    counts: { picks: pickCount, replenishments: replenCount, breakRelocations: breakCount },
+    counts: { picks: pickCount, breakRelocations: breakCount },
   };
 }
 
@@ -232,6 +207,7 @@ export async function persistPlan(db: DbClient, input: PersistPlanInput): Promis
   const repos = createRepositories(db);
   const plan = buildPlan(input);
 
+  await repos.waves.deletePendingByDate(input.asOf);
   const waves = await repos.waves.create(plan.waves);
   const waveIdByNo = new Map(waves.map((w) => [w.waveNo, w.id]));
 

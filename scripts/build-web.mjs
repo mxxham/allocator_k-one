@@ -32,6 +32,12 @@ function readEnv() {
 }
 
 const env = readEnv();
+// Vercel and other platforms inject env vars into process.env, not .env files
+if (!env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_URL) env.VITE_SUPABASE_URL = process.env.VITE_SUPABASE_URL;
+if (!env.VITE_SUPABASE_PUBLISHABLE_KEY && process.env.VITE_SUPABASE_PUBLISHABLE_KEY) env.VITE_SUPABASE_PUBLISHABLE_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+if (!env.VITE_SUPABASE_ANON_KEY && process.env.VITE_SUPABASE_ANON_KEY) env.VITE_SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY;
+if (!env.SUPABASE_URL && process.env.SUPABASE_URL) env.SUPABASE_URL = process.env.SUPABASE_URL;
+if (!env.SUPABASE_PUBLISHABLE_KEY && process.env.SUPABASE_PUBLISHABLE_KEY) env.SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_PUBLISHABLE_KEY;
 const url = env.VITE_SUPABASE_URL ?? env.SUPABASE_URL;
 const key = env.VITE_SUPABASE_PUBLISHABLE_KEY ?? env.VITE_SUPABASE_ANON_KEY ?? env.SUPABASE_PUBLISHABLE_KEY;
 

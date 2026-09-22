@@ -245,8 +245,10 @@ flip a row to COMPLETED or edit a quantity directly (RLS + CHECK).
 
 ### Migrations
 
-Three version-controlled files under `supabase/migrations/`:
-`0001_initial_schema.sql`, `0002_posting_functions.sql`, `0003_rls_and_views.sql`.
+Four version-controlled files under `supabase/migrations/`:
+`0001_initial_schema.sql`, `0002_posting_functions.sql`, `0003_rls_and_views.sql`,
+`0004_security_hardening.sql` (search_path hardening, EXECUTE restrictions,
+view security).
 
 ```bash
 supabase db push          # to a linked Supabase project, or
@@ -256,12 +258,14 @@ supabase migration up     # apply pending migrations locally
 ### Setup (manual, once)
 
 1. Create a Supabase project (or any PostgreSQL 16).
-2. Apply the three migrations (`supabase db push`).
+2. Apply the four migrations (`supabase db push`).
 3. Copy `.env.example` → `.env.local` and fill in `VITE_SUPABASE_URL`,
-   `VITE_SUPABASE_PUBLISHABLE_KEY` (browser-safe) and `SUPABASE_SERVICE_ROLE_KEY`
-   (server only — never `VITE_`-prefixed, never committed).
+   `VITE_SUPABASE_PUBLISHABLE_KEY` (browser-safe) and `SUPABASE_SECRET_KEY`
+   (server only — never `VITE_`-prefixed, never committed). Legacy
+   `SUPABASE_SERVICE_ROLE_KEY` is also accepted but will be removed once all
+   deployments migrate.
 4. Rebuild the web bundle (`npm run build:web`) — the publishable key is
-   injected at build time; the service key is never bundled.
+   injected at build time; the secret key is never bundled.
 5. Import the opening snapshot, then run allocations from the DB:
 
 ```bash
@@ -290,6 +294,103 @@ is unset. Quick local server:
 docker run -d --name fefo-test -e POSTGRES_PASSWORD=test -p 54329:5432 postgres:16
 TEST_DATABASE_URL=postgres://postgres:test@localhost:54329/postgres npm run test:db
 ```
+
+### Live Supabase wire testing (Phase 11B)
+
+The local integration tests (`test:db`, `test:parity`) validate SQL correctness
+via direct `pg` connections — they prove the functions, RLS policies and views
+work. They do **not** prove the supabase-js client talks correctly through
+PostgREST over HTTPS. That requires a live test.
+
+#### Prerequisites
+
+1. A test Supabase project (not production).
+2. All four migrations applied (`supabase db push` or via the Dashboard SQL editor).
+3. The three required roles exist: `anon`, `authenticated`, `service_role`
+   (Supabase creates these automatically).
+4. Three API keys from **Project Settings → API**:
+   - `SUPABASE_URL` — e.g. `https://xyz.supabase.co`
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` — the anon/publishable key (browser-safe)
+   - `SUPABASE_SECRET_KEY` — the secret/service-role key (server only)
+
+#### Setup
+
+```bash
+# 1. Create .env.local with live project credentials
+cp .env.example .env.local
+# Fill in: VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY
+
+# 2. Rebuild the web bundle so the publishable key is injected
+npm run build:web
+
+# 3. Import the Sep 18 workbook snapshot into the live project
+npm run import:wms -- "data/Warehouse Management System_18 September 2026_.xlsx"
+```
+
+#### Wire-test checklist
+
+These checks prove the supabase-js → PostgREST → PostgreSQL path works end to
+end through the Supabase platform. Run each and record the result:
+
+| # | What to test | How to verify | Expected |
+|---|---|---|---|
+| 1 | **Publishable key reads** | Load the web app, open Ops → Inventory tab | SKU/stock data visible, no errors |
+| 2 | **Secret key writes (CLI)** | `npm run import:wms -- "data/..."` succeeds | Import completes, stock rows inserted |
+| 3 | **RPC via supabase-js (mutating)** | `npm start -- --db --out out` with live DB | Allocation completes, waves/movements/outbound rows created |
+| 4 | **search_path hardening** | `SELECT apply_stock_delta('CB21A02','550076636','05I26JJ','2030-08-24',-1)` as `anon` | **Permission denied** — function is service_role only |
+| 5 | **EXECUTE restriction (post_movement)** | `SELECT post_movement(...)` as `anon` | **Permission denied** |
+| 6 | **EXECUTE restriction (complete_wave)** | `SELECT complete_wave(...)` as `anon` | **Permission denied** |
+| 7 | **Non-mutating RPC (set_*_status)** | Call `set_movement_status(...)` as `anon` via Supabase client | Works (allowed) |
+| 8 | **View security_invoker** | `SELECT * FROM stock_vs_ledger` as `anon` via Supabase client | Returns only RLS-visible rows (not all rows) |
+| 9 | **550076636 end-to-end** | Import → allocate → post movements → complete waves 6 + 13 | Sisa flow: 8 → 0 → 37 → 51 → 43 at pickface CC21A02, SKU 550076636, Batch 05I26JJ |
+| 10 | **Browser bundle clean** | `grep -E "sb_secret_|service_role_|SUPABASE_SECRET" web/*.js` | Only the supabase-js key-format validation string, no real keys |
+
+#### Running checks 4–6 manually via SQL
+
+In the Supabase Dashboard → SQL Editor, run as each role:
+
+```sql
+-- As anon (Dashboard SQL editor, no auth header):
+SET role anon;
+SELECT apply_stock_delta('CB21A02','550076636','05I26JJ','2030-08-24',-1);
+-- → ERROR: permission denied for function apply_stock_delta
+
+RESET role;
+SELECT post_movement('00000000-0000-0000-0000-000000000000'::uuid);
+-- → ERROR: permission denied for function post_movement
+
+RESET role;
+SELECT complete_wave('00000000-0000-0000-0000-000000000000'::uuid);
+-- → ERROR: permission denied for function complete_wave
+```
+
+Non-mutating functions (e.g. `set_movement_status`, `daily_summary`) must still
+work:
+
+```sql
+SET role anon;
+SELECT set_movement_status('00000000-0000-0000-0000-000000000000'::uuid, 'completed');
+-- → returns status or error about row not found (NOT a permission error)
+
+SELECT daily_summary('2026-09-18');
+-- → returns JSON summary (NOT a permission error)
+```
+
+#### Running checks 9–10 via CLI
+
+```bash
+# 9. Full 550076636 regression against live Supabase
+npm start -- "data/Warehouse Management System_18 September 2026_.xlsx" --db --out out
+
+# 10. Bundle audit
+grep -iE "sb_secret_|service_role_|SUPABASE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY" web/*.js
+# Should only match supabase-js internal key-format validation, not actual keys
+```
+
+> **Note**: Checks 4–8 require executing SQL as specific roles. When the
+> Dashboard SQL Editor runs as the authenticated user (not `anon` or
+> `service_role`), use the **Supabase CLI** or a direct Postgres connection
+> with `SET ROLE` to simulate each role's permissions.
 
 
 ### Configuration worth tuning

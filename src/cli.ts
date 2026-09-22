@@ -3,7 +3,6 @@ import { allocate, relocateByWaveOrder } from './allocator.js';
 import { withConfig } from './config.js';
 import { buildPicklists } from './picklist.js';
 import { derivePickfaces } from './pickface.js';
-import { replenish, sequenceReplenishment } from './replenishment.js';
 import { buildMovementReport } from './movement.js';
 import { computeStockAfterMovements } from './ledger.js';
 import { loadWorkbook } from './adapters/excel-input.js';
@@ -14,7 +13,7 @@ import { generatePicklistPdfs } from './adapters/pdf-output.js';
 /**
  * Usage:
  *   npx tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD]
- *                      [--min-shelf-life DAYS] [--no-split] [--no-replenish]
+ *                      [--min-shelf-life DAYS] [--no-split]
  *                      [--db]
  *
  * --db (or DATABASE_MODE=true) switches the STOCK source from the workbook
@@ -24,7 +23,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const input = argv.find((a) => !a.startsWith('--'));
   if (!input) {
-    console.error('usage: tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD] [--min-shelf-life DAYS] [--no-split] [--no-replenish] [--pdf]');
+    console.error('usage: tsx src/cli.ts <workbook.xlsx> [--out DIR] [--as-of YYYY-MM-DD] [--min-shelf-life DAYS] [--no-split] [--pdf]');
     process.exit(1);
   }
   const flag = (name: string): string | undefined => {
@@ -62,26 +61,18 @@ async function main(): Promise<void> {
   const pickfaceLedger = relocateByWaveOrder(result.lines, pickfaces, config, stock);
   result.picklists = buildPicklists(result, demand, config);
 
-  // 2. pickface replenishment, against stock after picks AND relocations
-  const stockAfterMovements = computeStockAfterMovements(stock, result.lines, pickfaces);
-
-  const replenishment = argv.includes('--no-replenish')
-    ? undefined
-    : replenish(stockAfterMovements, pickfaces, config, demand, result.lines, pickfaceLedger);
-  if (replenishment) replenishment.tasks = sequenceReplenishment(replenishment.tasks);
-
-  // 3. movement report
-  const movement = replenishment ? buildMovementReport(result, replenishment) : undefined;
+  // 2. movement report
+  const movement = buildMovementReport(result);
 
   const xlsxPath = `${outDir}/picklist_${stamp}.xlsx`;
   const htmlPath = `${outDir}/picklist_${stamp}.html`;
-  await writePicklistWorkbook(result, xlsxPath, replenishment, movement, pickfaces);
-  writeFileSync(htmlPath, renderPicklistHtml(result, replenishment, config, pickfaces), 'utf8');
+  await writePicklistWorkbook(result, xlsxPath, movement, pickfaces);
+  writeFileSync(htmlPath, renderPicklistHtml(result, pickfaces), 'utf8');
 
   const outputPaths: string[] = [xlsxPath, htmlPath];
 
   if (argv.includes('--pdf')) {
-    const pdfs = generatePicklistPdfs(result, replenishment, config, pickfaces);
+    const pdfs = generatePicklistPdfs(result, config, pickfaces);
     for (const { name, data } of pdfs) {
       const pdfPath = `${outDir}/${name}`;
       writeFileSync(pdfPath, data);
@@ -100,16 +91,6 @@ async function main(): Promise<void> {
   console.log(`  bins touched          : ${s.binsTouched}`);
   console.log(`  picklists             : ${result.picklists.length}`);
   console.log(`  shortages             : ${result.shortages.length}`);
-  if (replenishment) {
-    const r = replenishment.stats;
-    console.log(`\nPickface replenishment`);
-    console.log(`  pickfaces evaluated   : ${r.pickfacesEvaluated}`);
-    console.log(`  pickfaces replenished : ${r.pickfacesReplenished}`);
-    console.log(`  cartons moved         : ${r.cartonsMoved}  (${r.palletMoves} pallet, ${r.caseMoves} case)`);
-    console.log(`  sealed pallets opened : ${r.palletsBroken}`);
-    console.log(`  replenishment tasks   : ${replenishment.tasks.length}`);
-    console.log(`  shortages             : ${replenishment.shortages.length}`);
-  }
   const errs = result.warnings.filter((w) => w.level === 'ERROR').length;
   const warns = result.warnings.filter((w) => w.level === 'WARN').length;
   console.log(`\n  exceptions            : ${errs} error, ${warns} warning`);

@@ -1,8 +1,8 @@
 import ExcelJS from 'exceljs';
-import { checkDigit, parseLocation, pickSequenceKey } from '../pickpath.js';
+import { checkDigit } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
-import type { AllocationResult, MovementRow, PickfaceAssignment, ReplenishmentResult, ReplenishmentTask } from '../types.js';
+import type { AllocationResult, MovementRow, PickfaceAssignment } from '../types.js';
 
 const FONT = { name: 'Arial', size: 10 };
 const HEAD = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -18,7 +18,6 @@ const HEAD_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { 
 export async function writePicklistWorkbook(
   result: AllocationResult,
   outPath: string,
-  replenishment?: ReplenishmentResult,
   movement?: MovementRow[],
   pickfaces?: Map<string, PickfaceAssignment>,
   config?: AllocatorConfig,
@@ -48,6 +47,7 @@ export async function writePicklistWorkbook(
     ['Pick Type', 10],
     ['Sisa di Bin', 11],
     ['Order No', 26],
+    ['Print Date', 14],
   ]);
 
   for (const pl of result.picklists) {
@@ -71,6 +71,7 @@ export async function writePicklistWorkbook(
         l.pickType,
         l.qtyRemainingInBin,
         l.orderNos.join(', '),
+        new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }),
       ]);
       row.font = FONT;
       row.getCell(12).numFmt = 'yyyy-mm-dd';
@@ -81,42 +82,6 @@ export async function writePicklistWorkbook(
         row.getCell(15).font = { ...FONT, color: { argb: 'FFC00000' } };
         row.getCell(15).value = 'CASE*';
       }
-    }
-  }
-
-  // ---- Replenishment rows on picklist (bin-to-bin moves) ------------------
-  if (replenishment && replenishment.tasks.length > 0) {
-    const sorted = [...replenishment.tasks].sort((a, b) => {
-      const pa = parseLocation(a.fromLocation);
-      const pb = parseLocation(b.fromLocation);
-      const ka = pa ? pickSequenceKey(pa, cfg) : Number.MAX_SAFE_INTEGER;
-      const kb = pb ? pickSequenceKey(pb, cfg) : Number.MAX_SAFE_INTEGER;
-      return ka - kb;
-    });
-    for (const t of sorted) {
-      const row = ws.addRow([
-        'REPLENISH',
-        '',
-        '',
-        'REPLEN',
-        '',
-        t.fromLocation,
-        checkDigit(t.fromLocation),
-        t.sku,
-        t.description,
-        t.toLocation,
-        t.batch ?? '',
-        t.expiryDate,
-        t.qtyMove,
-        uomLabel(t.uom),
-        t.breaksPallet ? 'CASE*' : t.pickType,
-        t.qtyRemainingAtSource,
-        '',
-      ]);
-      row.font = { ...FONT, color: { argb: 'FF1F3864' } };
-      row.getCell(12).numFmt = 'yyyy-mm-dd';
-      row.getCell(6).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F0FE' } };
-      row.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F0FE' } };
     }
   }
 
@@ -200,62 +165,6 @@ export async function writePicklistWorkbook(
     const row = ex.addRow([w.level, w.code, w.message]);
     row.font = FONT;
     if (w.level === 'ERROR') row.getCell(1).font = { ...FONT, bold: true, color: { argb: 'FFC00000' } };
-  }
-
-  // ---- Replenishment --------------------------------------------------------
-  if (replenishment) {
-    const rp = wb.addWorksheet('Replenishment', { views: [{ state: 'frozen', ySplit: 1 }] });
-    addHeader(rp, [
-      ['Seq', 6],
-      ['Material', 12],
-      ['Description', 34],
-      ['From Bin', 10],
-      ['To Pickface', 12],
-      ['Batch', 12],
-      ['Exp Date', 12],
-      ['Qty Move', 10],
-      ['UOM', 10],
-      ['Type', 8],
-      ['Sisa Sumber', 12],
-      ['Pickface After', 14],
-      ['Reason', 16],
-    ]);
-    for (const t of replenishment.tasks) {
-      const row = rp.addRow([
-        t.seq,
-        t.sku,
-        t.description,
-        t.fromLocation,
-        t.toLocation,
-        t.batch ?? '',
-        t.expiryDate,
-        t.qtyMove,
-        uomLabel(t.uom),
-        t.pickType,
-        t.qtyRemainingAtSource,
-        t.qtyAtPickfaceAfter,
-        t.reason,
-      ]);
-      row.font = FONT;
-      row.getCell(7).numFmt = 'yyyy-mm-dd';
-      if (t.breaksPallet) row.getCell(10).font = { ...FONT, color: { argb: 'FFC00000' } };
-    }
-    rp.autoFilter = { from: 'A1', to: 'M1' };
-
-    if (replenishment.shortages.length) {
-      const rs = wb.addWorksheet('Replenishment Shortage');
-      addHeader(rs, [
-        ['Material', 12],
-        ['Description', 34],
-        ['Pickface', 12],
-        ['Needed', 10],
-        ['Moved', 10],
-        ['Short', 9],
-      ]);
-      for (const s of replenishment.shortages) {
-        rs.addRow([s.sku, s.description, s.toLocation, s.qtyNeeded, s.qtyMoved, s.qtyShort]).font = FONT;
-      }
-    }
   }
 
   // ---- Movement report --------------------------------------------------------

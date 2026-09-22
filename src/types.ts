@@ -161,52 +161,7 @@ export interface PickfaceAssignment {
   isAuto: boolean;
 }
 
-/** One bin-to-bin move: top up a pickface from reserve stock, FEFO-first. */
-export interface ReplenishmentTask {
-  sku: string;
-  description: string;
-  fromLocation: string;
-  fromBinId: string;
-  toLocation: string;
-  batch: string | null;
-  expiryDate: Date;
-  qtyMove: number;
-  pickType: PickType;
-  upp: number;
-  uom: string | null;
-  qtyRemainingAtSource: number;
-  qtyAtPickfaceAfter: number;
-  daysToExpiry: number;
-  seq: number;
-  breaksPallet: boolean;
-  reason: 'BELOW_TARGET' | 'PENDING_DEMAND' | 'BROKEN_PALLET';
-}
-
-export interface ReplenishmentShortage {
-  sku: string;
-  description: string;
-  toLocation: string;
-  qtyNeeded: number;
-  qtyMoved: number;
-  qtyShort: number;
-}
-
 export type PickfaceLedger = Map<string, { location: string; finalQty: number }>;
-
-export interface ReplenishmentResult {
-  generatedAt: Date;
-  tasks: ReplenishmentTask[];
-  shortages: ReplenishmentShortage[];
-  warnings: Warning[];
-  stats: {
-    pickfacesEvaluated: number;
-    pickfacesReplenished: number;
-    cartonsMoved: number;
-    palletMoves: number;
-    caseMoves: number;
-    palletsBroken: number;
-  };
-}
 
 // ---- Physical inventory event model -------------------------------------
 

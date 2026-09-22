@@ -1,20 +1,16 @@
 import * as XLSX from 'xlsx';
-import { checkDigit, parseLocation, pickSequenceKey } from '../pickpath.js';
+import { checkDigit } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
-import { withConfig, type AllocatorConfig } from '../config.js';
-import type { AllocationResult, MovementRow, PickfaceAssignment, ReplenishmentResult } from '../types.js';
+import type { AllocationResult, MovementRow, PickfaceAssignment } from '../types.js';
 
 const dateStr = (d: Date) => d.toISOString().slice(0, 10);
 
 export function buildWorkbook(
   result: AllocationResult,
-  replenishment?: ReplenishmentResult,
   movement?: MovementRow[],
   pickfaces?: Map<string, PickfaceAssignment>,
-  config?: AllocatorConfig,
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
-  const cfg = config ?? withConfig();
 
   const plRows: Record<string, unknown>[] = [];
   for (const pl of result.picklists) {
@@ -38,37 +34,6 @@ export function buildWorkbook(
         'Pick Type': l.breaksPallet ? 'CASE*' : l.pickType,
         'Sisa di Bin': l.qtyRemainingInBin,
         'Order No': l.orderNos.join(', '),
-      });
-    }
-  }
-
-  if (replenishment && replenishment.tasks.length > 0) {
-    const sorted = [...replenishment.tasks].sort((a, b) => {
-      const pa = parseLocation(a.fromLocation);
-      const pb = parseLocation(b.fromLocation);
-      const ka = pa ? pickSequenceKey(pa, cfg) : Number.MAX_SAFE_INTEGER;
-      const kb = pb ? pickSequenceKey(pb, cfg) : Number.MAX_SAFE_INTEGER;
-      return ka - kb;
-    });
-    for (const t of sorted) {
-      plRows.push({
-        Picklist: 'REPLENISH',
-        'NO (Wave)': '',
-        Shipments: '',
-        Task: 'REPLEN',
-        Seq: '',
-        Lokasi: t.fromLocation,
-        Chk: checkDigit(t.fromLocation),
-        Material: t.sku,
-        Description: t.description,
-        'Ke Lokasi': t.toLocation,
-        Batch: t.batch ?? '',
-        'Exp Date': dateStr(t.expiryDate),
-        'Qty Pick': t.qtyMove,
-        'UOM': uomLabel(t.uom),
-        'Pick Type': t.breaksPallet ? 'CASE*' : t.pickType,
-        'Sisa di Bin': t.qtyRemainingAtSource,
-        'Order No': '',
       });
     }
   }
@@ -110,37 +75,6 @@ export function buildWorkbook(
 
   const exRows = result.warnings.map((w) => ({ Level: w.level, Code: w.code, Message: w.message }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exRows), 'Exceptions');
-
-  if (replenishment) {
-    const rpRows = replenishment.tasks.map((t) => ({
-      Seq: t.seq,
-      Material: t.sku,
-      Description: t.description,
-      'From Bin': t.fromLocation,
-      'To Pickface': t.toLocation,
-      Batch: t.batch ?? '',
-      'Exp Date': dateStr(t.expiryDate),
-      'Qty Move': t.qtyMove,
-      'UOM': uomLabel(t.uom),
-      Type: t.breaksPallet ? 'CASE*' : t.pickType,
-      'Sisa Sumber': t.qtyRemainingAtSource,
-      'Pickface After': t.qtyAtPickfaceAfter,
-      Reason: t.reason,
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rpRows), 'Replenishment');
-
-    if (replenishment.shortages.length) {
-      const rsRows = replenishment.shortages.map((s) => ({
-        Material: s.sku,
-        Description: s.description,
-        Pickface: s.toLocation,
-        Needed: s.qtyNeeded,
-        Moved: s.qtyMoved,
-        Short: s.qtyShort,
-      }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rsRows), 'Replenishment Shortage');
-    }
-  }
 
   if (movement) {
     const mvRows = movement.map((m) => ({

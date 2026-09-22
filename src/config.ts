@@ -74,20 +74,6 @@ export interface AllocatorConfig {
    * pallet size).
    */
   pickfaceTargetQty: number | 'upp';
-  /**
-   * When a pick breaks a sealed pallet (takes less than UPP), automatically
-   * move the remaining loose cartons from bulk (Level B-E) to pickface (Level A).
-   * Safety rule: loose cartons on upper levels are hazardous to handle.
-   */
-  moveBrokenPalletToPickface: boolean;
-  /** Only generate a replenishment task when the shortfall is at least this many cartons. */
-  replenishmentMinTriggerQty: number;
-  /**
-   * Also top up a pickface enough to cover today's outbound demand for that
-   * SKU, even past the normal target — so a big order doesn't strand the
-   * picker mid-pick.
-   */
-  replenishCoverPendingDemand: boolean;
 
   // ---- Relocation event ordering -------------------------------------------
   /**
@@ -111,7 +97,6 @@ export const DEFAULT_CONFIG: AllocatorConfig = {
 
   preferOpenPalletForRemainder: true,
   bestFitOpenPallets: true,
-  moveBrokenPalletToPickface: true,
 
   // CA01A01 → aisle CA, bay 01, level A, position 01
   rackLocationPattern: /^C[A-G]\d{2}[A-E]\d{2}$/,
@@ -131,8 +116,6 @@ export const DEFAULT_CONFIG: AllocatorConfig = {
   pickfaceLevels: ['A'],
   pickfaceOverrides: {},
   pickfaceTargetQty: 'upp',
-  replenishmentMinTriggerQty: 1,
-  replenishCoverPendingDemand: true,
 
   relocationOrderBasis: 'picklistNumber',
 };

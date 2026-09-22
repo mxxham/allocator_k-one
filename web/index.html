@@ -223,6 +223,7 @@
       <button data-panel="panel-movement">Movement report</button>
       <button data-panel="panel-shortage">Shortage</button>
       <button data-panel="panel-exceptions">Exceptions</button>
+      <button data-panel="panel-double">Double</button>
       <button data-panel="panel-pickface">Pickfaces</button>
     </div>
 
@@ -293,6 +294,14 @@
             <button class="btn" id="inbRefresh">Refresh</button>
           </div>
           <div id="inbTable"></div>
+          <div class="card">
+            <h2>Import inbound from workbook</h2>
+            <div class="ops-bar">
+              <input type="file" id="inbImportFile" accept=".xlsx,.xlsm" />
+            </div>
+            <pre class="preview" id="inbImportPreview" hidden></pre>
+            <button class="btn primary" id="inbImportConfirm" disabled>Confirm import</button>
+          </div>
           <div class="card" style="margin-top:1rem">
             <h2>Record receipt (PENDING — stock moves only on Complete)</h2>
             <div class="adj-grid">
@@ -323,6 +332,14 @@
             </label>
             <button class="btn" id="outRefresh">Refresh</button>
           </div>
+          <div class="card">
+            <h2>Import schedule from workbook</h2>
+            <div class="ops-bar">
+              <input type="file" id="outImportFile" accept=".xlsx,.xlsm" />
+            </div>
+            <pre class="preview" id="outImportPreview" hidden></pre>
+            <button class="btn primary" id="outImportConfirm" disabled>Confirm import</button>
+          </div>
           <div id="outTable"></div>
         </div>
 
@@ -330,6 +347,13 @@
           <div class="ops-bar">
             <label>Planned date <input type="date" id="execDate" /></label>
             <button class="btn" id="execRefresh">Refresh waves</button>
+          </div>
+          <div class="card">
+            <h2>Run allocation from DB</h2>
+            <p style="font-size:.82rem;color:var(--ink-dim);margin:0 0 .7rem">
+              Reads stock and imported demand from the database, runs FEFO allocation, and creates waves + movements.
+            </p>
+            <button class="btn primary" id="allocRunBtn">Run allocation</button>
           </div>
           <div id="execTable"></div>
           <div id="execDetail" style="margin-top:1rem"></div>

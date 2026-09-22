@@ -86,4 +86,23 @@ export class WaveRepository {
     if (error) throw toWmsError(new Error(error.message));
     return data as RpcResult;
   }
+
+  async deletePendingByDate(date: Date | string): Promise<number> {
+    const d = typeof date === 'string' ? date : formatDbDate(date);
+    const { data: waves, error: selErr } = await this.db
+      .from('waves')
+      .select('id')
+      .eq('planned_date', d)
+      .eq('status', 'PENDING');
+    if (selErr) throw toWmsError(new Error(selErr.message));
+    if (!waves || waves.length === 0) return 0;
+    const ids = waves.map((w) => w.id);
+    const { error: delMovErr } = await this.db.from('movements').delete().in('wave_id', ids);
+    if (delMovErr) throw toWmsError(new Error(delMovErr.message));
+    const { error: delOutErr } = await this.db.from('outbound').delete().in('wave_id', ids);
+    if (delOutErr) throw toWmsError(new Error(delOutErr.message));
+    const { error: delWavErr } = await this.db.from('waves').delete().in('id', ids);
+    if (delWavErr) throw toWmsError(new Error(delWavErr.message));
+    return ids.length;
+  }
 }

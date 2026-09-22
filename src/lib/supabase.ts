@@ -39,10 +39,11 @@ function nodeEnv(name: string): string | undefined {
   return typeof process !== 'undefined' && process.env ? process.env[name] || undefined : undefined;
 }
 
-/** Server-side config. Prefers the service-role key, falls back to publishable. */
+/** Server-side config. Prefers the secret key, then service-role, then publishable. */
 export function getServerConfig(): DatabaseConfig {
   const url = nodeEnv('VITE_SUPABASE_URL') ?? nodeEnv('SUPABASE_URL');
   const key =
+    nodeEnv('SUPABASE_SECRET_KEY') ??
     nodeEnv('SUPABASE_SERVICE_ROLE_KEY') ??
     nodeEnv('SUPABASE_PUBLISHABLE_KEY') ??
     nodeEnv('VITE_SUPABASE_PUBLISHABLE_KEY') ??
@@ -51,7 +52,7 @@ export function getServerConfig(): DatabaseConfig {
   if (!url || !key) {
     throw new WmsError(
       'DATABASE_UNAVAILABLE',
-      'Database unavailable — set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (and optionally SUPABASE_SERVICE_ROLE_KEY for server-side admin operations). See .env.example.',
+      'Database unavailable — set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY (and optionally SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY for server-side admin operations). See .env.example.',
     );
   }
   return { url, key };

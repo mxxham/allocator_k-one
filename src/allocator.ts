@@ -31,8 +31,8 @@ import type {
  *   5. Repeat until the line is filled, or flag the balance as a shortage.
  *
  * The bin-choice rule itself lives in binselect.ts and is shared with
- * replenishment.ts, so a pickface top-up picks stock the exact same way an
- * outbound order does.
+ * the pickface relocation logic, so a pickface top-up picks stock the
+ * exact same way an outbound order does.
  *
  * Deterministic: same inputs always produce the same picklist.
  */
@@ -313,11 +313,40 @@ export function relocateByWaveOrder(
   };
   const relocationEvents: RelocEvent[] = [];
 
+  const totalDemandBySku = new Map<string, number>();
+  for (const line of lines) {
+    totalDemandBySku.set(line.sku, (totalDemandBySku.get(line.sku) ?? 0) + line.qtyPick);
+  }
+
+  const pickfaceStockBySku = new Map<string, number>();
+  for (const bin of stock) {
+    const pf = pickfaces.get(bin.sku);
+    if (pf && bin.location === pf.location) {
+      pickfaceStockBySku.set(bin.sku, (pickfaceStockBySku.get(bin.sku) ?? 0) + bin.qtyCartons);
+    }
+  }
+
+  // Track which source identities already have a relocation event to avoid
+  // double-counting when multiple waves pick from the same bin.
+  const relocatedSrcKeys = new Set<string>();
+
   for (const line of lines) {
     const pf = pickfaces.get(line.sku);
     if (!pf) continue;
-    if (line.location !== pf.location && line.breaksPallet) {
+    if (line.location !== pf.location && line.qtyRemainingInBin > 0) {
+      const currentPickfaceQty = pickfaceStockBySku.get(line.sku) ?? 0;
+      const totalDemand = totalDemandBySku.get(line.sku) ?? 0;
+      const pickfaceHasRoom = currentPickfaceQty < pf.targetQtyCartons;
+      const demandExceedsPallet = totalDemand > pf.targetQtyCartons;
+
+      if (!pickfaceHasRoom && !demandExceedsPallet) continue;
+
       const srcKey = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
+      // Only ONE relocation event per physical identity — the last wave that
+      // touches this identity carries the correct final remaining stock.
+      if (relocatedSrcKeys.has(srcKey)) continue;
+      relocatedSrcKeys.add(srcKey);
+
       const destKey = stockIdentityKey(pf.location, line.sku, line.batch, line.expiryDate);
       relocationEvents.push({
         sourceKey: srcKey,
@@ -420,7 +449,7 @@ export function relocateByWaveOrder(
     const sku = picks[0].sku;
     const pf = pickfaces.get(sku);
     if (!pf) continue;
-    const hasBreak = picks.some((p) => p.breaksPallet);
+    const hasRemainder = picks.some((p) => p.qtyRemainingInBin > 0);
     const waveSorted = [...picks].sort(
       (a, b) => waveSortKey(a.waveNo) - waveSortKey(b.waveNo),
     );
@@ -428,8 +457,8 @@ export function relocateByWaveOrder(
       const pick = waveSorted[i];
       if (i === 0) {
         pick.location = picks[0].location;
-        pick.breaksPallet = hasBreak;
-        if (hasBreak) breakPalletLines.add(pick);
+        pick.breaksPallet = picks[0].breaksPallet;
+        if (picks[0].breaksPallet) breakPalletLines.add(pick);
       } else {
         pick.location = pf.location;
         pick.breaksPallet = false;

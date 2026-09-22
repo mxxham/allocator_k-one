@@ -8,6 +8,7 @@
  */
 
 import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
 import { getBrowserClient, type DbClient } from '../lib/supabase.js';
 import { createRepositories, type Repositories } from '../repository/index.js';
 import { ExecutionService } from '../services/execution.js';
@@ -15,9 +16,13 @@ import { DailyService } from '../services/daily.js';
 import { ReconciliationService } from '../services/reconciliation.js';
 import { adjustStock } from '../services/adjustment.js';
 import { validateImport, executeImport, formatPreview, type ImportPreview } from '../adapters/import-preview.js';
+import { renderPicklistPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
+import { buildPicklistsFromDB } from '../services/daily-workflow.js';
 import { buildStockWorkbook } from '../services/stock-sheet.js';
 import { loadWorkbookFromBuffer } from './browser-input.js';
 import { withConfig } from '../config.js';
+import { derivePickfaces } from '../pickface.js';
+import { loadStockFromDatabase } from '../adapters/database-stock.js';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
@@ -358,12 +363,13 @@ async function loadWaves(): Promise<void> {
       escapeHtml(w.destination),
       statusTag(w.status),
       summary,
-      w.status === 'PENDING'
+      btn('wave-pdf', w.id, 'PDF', 'btn sm') + ' ' +
+      (w.status === 'PENDING'
         ? btn('wave-detail', w.id, 'Movements') + ' ' +
           btn('wave-complete', w.id, 'Complete', 'btn sm primary') + ' ' +
           btn('wave-reschedule', w.id, 'Reschedule') + ' ' +
           btn('wave-cancel', w.id, 'Cancel', 'btn sm danger')
-        : btn('wave-detail', w.id, 'Movements'),
+        : btn('wave-detail', w.id, 'Movements')),
     ]);
   }
   $('#execTable').innerHTML = table(
@@ -395,6 +401,38 @@ $('#execTable').addEventListener('click', async (e) => {
     if (!reason) return;
     await run('Cancelling wave', () => exec!.cancelWave(id, actor(), reason));
     void loadWaves();
+  } else if (action === 'wave-pdf') {
+    if (!repos) return;
+    const wave = await repos.waves.get(id);
+    if (!wave) return;
+    const movements = await repos.movements.listByWave(id);
+    const outbound = await repos.outbound.list({ waveNo: wave.waveNo });
+    const outboundByWave = new Map<string, typeof outbound>();
+    outboundByWave.set(wave.id, outbound);
+    const movementsByWave = new Map<string, typeof movements>();
+    movementsByWave.set(wave.id, movements);
+    const picklists = buildPicklistsFromDB([wave], movementsByWave, outboundByWave);
+    if (picklists.length === 0) { setOps('No pick movements for this wave.', 'error'); return; }
+    const { stock } = await loadStockFromDatabase(repos.stock);
+    const pickfaces = derivePickfaces(stock, withConfig({ asOf: new Date(wave.plannedDate ?? today() + 'T00:00:00Z') }));
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const ranges: PdfPageRange[] = [];
+    for (let i = 0; i < picklists.length; i++) {
+      if (i > 0) doc.addPage();
+      const start = doc.getNumberOfPages();
+      renderPicklistPdfPage(doc, picklists[i], pickfaces);
+      ranges.push({ startPage: start, endPage: doc.getNumberOfPages() });
+    }
+    stampPageNumbers(doc, ranges);
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `picklist_${wave.waveNo}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setOps(`PDF downloaded: picklist_${wave.waveNo}.pdf`, 'ok');
+    return;
   } else if (action === 'wave-detail') {
     const snap = await run('Loading movements', () => exec!.waveSnapshot(id));
     if (!snap) return;
@@ -538,6 +576,120 @@ $('#dbExport').addEventListener('click', async () => {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   downloadBlob(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `WMS_updated_${stamp}.xlsx`);
   setOps(`Exported ${records.length} stock rows — your original workbook was not touched.`, 'ok');
+});
+
+// ---- inbound file import ----------------------------------------------------
+
+let inbImportRecords: import('../repository/inbound-repo.js').NewInbound[] | null = null;
+
+$('#inbImportFile').addEventListener('change', async () => {
+  const f = $<HTMLInputElement>('#inbImportFile').files?.[0];
+  if (!f) return;
+  setOps(`Parsing ${f.name}…`, 'busy');
+  try {
+    const { parseInboundFromWorkbook } = await import('../adapters/inbound-import.js');
+    const buf = await f.arrayBuffer();
+    const inboundDate = $<HTMLInputElement>('#inbNewDate').value || today();
+    const result = parseInboundFromWorkbook(buf, { inboundDate });
+    inbImportRecords = result.records.length > 0 ? result.records : null;
+    const lines: string[] = [
+      `Import preview — ${f.name}`,
+      `  records to import : ${result.records.length}`,
+      `  warnings         : ${result.warnings.length}`,
+    ];
+    for (const w of result.warnings) lines.push(`    ${w}`);
+    lines.push(result.records.length > 0 ? '  status           : READY TO IMPORT' : '  status           : EMPTY (no records)');
+    const pre = $<HTMLPreElement>('#inbImportPreview');
+    pre.textContent = lines.join('\n');
+    pre.hidden = false;
+    $<HTMLButtonElement>('#inbImportConfirm').disabled = !inbImportRecords;
+    setOps(inbImportRecords ? 'Preview ready — review, then confirm.' : 'No valid records found.', inbImportRecords ? 'ok' : 'error');
+  } catch (err) {
+    inbImportRecords = null;
+    $<HTMLButtonElement>('#inbImportConfirm').disabled = true;
+    setOps(`Could not parse ${f.name}: ${errText(err)}`, 'error');
+  }
+});
+
+$('#inbImportConfirm').addEventListener('click', async () => {
+  if (!daily || !inbImportRecords) return;
+  const records = inbImportRecords;
+  if (!window.confirm(`Import ${records.length} inbound records as PENDING?`)) return;
+  const res = await run('Importing inbound', () => daily!.recordInbound(records));
+  if (res) {
+    setOps(`Imported ${res.length} inbound records — Complete each to add stock.`, 'ok');
+    inbImportRecords = null;
+    $<HTMLButtonElement>('#inbImportConfirm').disabled = true;
+    $<HTMLInputElement>('#inbImportFile').value = '';
+    void loadInbound();
+  }
+});
+
+// ---- outbound file import ---------------------------------------------------
+
+let outImportRecords: import('../repository/outbound-repo.js').NewOutbound[] | null = null;
+
+$('#outImportFile').addEventListener('change', async () => {
+  const f = $<HTMLInputElement>('#outImportFile').files?.[0];
+  if (!f) return;
+  setOps(`Parsing ${f.name}…`, 'busy');
+  try {
+    const { parseOutboundFromWorkbook } = await import('../adapters/outbound-import.js');
+    const buf = await f.arrayBuffer();
+    const outboundDate = $<HTMLInputElement>('#outDate').value || today();
+    const result = parseOutboundFromWorkbook(buf, { outboundDate });
+    outImportRecords = result.records.length > 0 ? result.records : null;
+    const lines: string[] = [
+      `Import preview — ${f.name}`,
+      `  records to import : ${result.records.length}`,
+      `  warnings         : ${result.warnings.length}`,
+    ];
+    for (const w of result.warnings) lines.push(`    ${w}`);
+    lines.push(result.records.length > 0 ? '  status           : READY TO IMPORT' : '  status           : EMPTY (no records)');
+    const pre = $<HTMLPreElement>('#outImportPreview');
+    pre.textContent = lines.join('\n');
+    pre.hidden = false;
+    $<HTMLButtonElement>('#outImportConfirm').disabled = !outImportRecords;
+    setOps(outImportRecords ? 'Preview ready — review, then confirm.' : 'No valid records found.', outImportRecords ? 'ok' : 'error');
+  } catch (err) {
+    outImportRecords = null;
+    $<HTMLButtonElement>('#outImportConfirm').disabled = true;
+    setOps(`Could not parse ${f.name}: ${errText(err)}`, 'error');
+  }
+});
+
+$('#outImportConfirm').addEventListener('click', async () => {
+  if (!repos || !outImportRecords) return;
+  const records = outImportRecords;
+  if (!window.confirm(`Import ${records.length} outbound records as PLANNED?`)) return;
+  const res = await run('Importing outbound', () => repos!.outbound.create(records));
+  if (res) {
+    setOps(`Imported ${res.length} outbound records — ready for allocation.`, 'ok');
+    outImportRecords = null;
+    $<HTMLButtonElement>('#outImportConfirm').disabled = true;
+    $<HTMLInputElement>('#outImportFile').value = '';
+    void loadOutbound();
+  }
+});
+
+// ---- allocation from DB -----------------------------------------------------
+
+$('#allocRunBtn').addEventListener('click', async () => {
+  if (!client) return;
+  if (!window.confirm('Run allocation from DB? This reads stock and imported demand, creates waves + movements.')) return;
+  const asOf = $<HTMLInputElement>('#execDate').value || today();
+  const res = await run('Running allocation', async () => {
+    const { runAllocationFromDB } = await import('../services/daily-workflow.js');
+    return runAllocationFromDB(client!, { asOf: new Date(asOf + 'T00:00:00Z') });
+  });
+  if (res) {
+    setOps(
+      `Allocation complete — ${res.waves.length} waves, ${res.movementCount} movements, ${res.stats.cartonsAllocated}/${res.stats.cartonsRequested} cartons (${res.stats.fillRatePct.toFixed(1)}% fill).`,
+      'ok',
+    );
+    void loadWaves();
+    void loadOutbound();
+  }
 });
 
 // ---- init ---------------------------------------------------------------------
