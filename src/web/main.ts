@@ -8,6 +8,7 @@ import { renderPicklistHtml } from '../adapters/html-output.js';
 import { renderPicklistPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
+import { parseLocation } from '../pickpath.js';
 import { buildPicklists, formatQty, uomLabel } from '../picklist.js';
 import { detectDoubles, type DoubleEntry } from '../double.js';
 import type {
@@ -209,7 +210,9 @@ function renderPicklistTab(): void {
       ${table(
         ['#', 'Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp', 'Qty', 'UOM', 'Sisa'],
         pl.lines.map((l) => {
-          const keLokasi = l.breaksPallet ? (pickfaces.get(l.sku)?.location ?? '') : '';
+          const pfLoc = pickfaces.get(l.sku)?.location ?? '';
+          const srcLevel = parseLocation(l.location)?.level ?? '';
+          const keLokasi = srcLevel !== 'A' && l.qtyRemainingInBin > 0 && pfLoc && l.location !== pfLoc ? pfLoc : '';
           return [
             l.seq,
             l.location,

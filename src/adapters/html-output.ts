@@ -1,4 +1,4 @@
-import { checkDigit } from '../pickpath.js';
+import { checkDigit, parseLocation } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 import type { AllocationResult, PickfaceAssignment, Picklist } from '../types.js';
 
@@ -37,7 +37,9 @@ ${pages}
 function renderPage(pl: Picklist, pickfaces?: Map<string, { location: string }>): string {
   const rows = pl.lines
     .map((l, idx) => {
-      const keLokasi = l.breaksPallet ? (pickfaces?.get(l.sku)?.location ?? '') : '';
+      const pfLoc = pickfaces?.get(l.sku)?.location ?? '';
+      const srcLevel = parseLocation(l.location)?.level ?? '';
+      const keLokasi = srcLevel !== 'A' && l.qtyRemainingInBin > 0 && pfLoc && l.location !== pfLoc ? pfLoc : '';
       const prevType = idx > 0 ? pl.lines[idx - 1].pickType : null;
       const separator = prevType && prevType !== l.pickType
         ? `<tr class="section-sep"><td colspan="11"><b>${l.pickType === 'PALLET' ? '— FORKLIFT / FULL PALLET —' : '— HANDPICK / ECERAN —'}</b></td></tr>`

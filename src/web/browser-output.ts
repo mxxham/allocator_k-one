@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { checkDigit } from '../pickpath.js';
+import { checkDigit, parseLocation } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 import type { AllocationResult, MovementRow, PickfaceAssignment } from '../types.js';
 
@@ -15,7 +15,9 @@ export function buildWorkbook(
   const plRows: Record<string, unknown>[] = [];
   for (const pl of result.picklists) {
     for (const l of pl.lines) {
-      const keLokasi = l.breaksPallet ? (pickfaces?.get(l.sku)?.location ?? '') : '';
+      const pfLoc = pickfaces?.get(l.sku)?.location ?? '';
+      const srcLevel = parseLocation(l.location)?.level ?? '';
+      const keLokasi = srcLevel !== 'A' && l.qtyRemainingInBin > 0 && pfLoc && l.location !== pfLoc ? pfLoc : '';
       plRows.push({
         Picklist: pl.picklistId,
         'NO (Wave)': pl.waveNo,

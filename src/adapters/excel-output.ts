@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { checkDigit } from '../pickpath.js';
+import { checkDigit, parseLocation } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
 import type { AllocationResult, MovementRow, PickfaceAssignment } from '../types.js';
@@ -52,7 +52,9 @@ export async function writePicklistWorkbook(
 
   for (const pl of result.picklists) {
     for (const l of pl.lines) {
-      const keLokasi = l.breaksPallet ? (pickfaces?.get(l.sku)?.location ?? '') : '';
+      const pfLoc = pickfaces?.get(l.sku)?.location ?? '';
+      const srcLevel = parseLocation(l.location)?.level ?? '';
+      const keLokasi = srcLevel !== 'A' && l.qtyRemainingInBin > 0 && pfLoc && l.location !== pfLoc ? pfLoc : '';
       const row = ws.addRow([
         pl.picklistId,
         pl.waveNo,

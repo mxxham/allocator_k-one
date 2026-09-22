@@ -305,6 +305,12 @@ function asTime(v: unknown): string | null {
   if (v instanceof Date) return v.toISOString().slice(11, 16);
   const s = asString(v);
   if (!s) return null;
-  const m = /^(\d{1,2}):(\d{2})/.exec(s);
-  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)?/i.exec(s);
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const min = m[2];
+  const suffix = m[3]?.toUpperCase();
+  if (suffix === 'PM' && hour < 12) hour += 12;
+  if (suffix === 'AM' && hour === 12) hour = 0;
+  return `${String(hour).padStart(2, '0')}:${min}`;
 }

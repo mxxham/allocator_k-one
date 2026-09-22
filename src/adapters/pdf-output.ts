@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
-import { checkDigit } from '../pickpath.js';
+import { checkDigit, parseLocation } from '../pickpath.js';
 import { uomLabel } from '../picklist.js';
 
 import { withConfig, type AllocatorConfig } from '../config.js';
@@ -191,7 +191,9 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
       body.push([{ content: label, colSpan: 11, styles: { fillColor: [230, 230, 230], fontStyle: 'bold', halign: 'center', textColor: [0, 0, 0] } }]);
       lastPickType = l.pickType;
     }
-    const keLokasi = l.breaksPallet ? (pickfaces?.get(l.sku)?.location ?? '') : '';
+    const pfLoc = pickfaces?.get(l.sku)?.location ?? '';
+    const srcLevel = parseLocation(l.location)?.level ?? '';
+    const keLokasi = srcLevel !== 'A' && l.qtyRemainingInBin > 0 && pfLoc && l.location !== pfLoc ? pfLoc : '';
     body.push([
       String(l.seq),
       l.location,
