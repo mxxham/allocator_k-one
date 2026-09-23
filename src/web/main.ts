@@ -1,11 +1,11 @@
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { zipSync } from 'fflate';
 import * as XLSX from 'xlsx';
-import jsPDF from 'jspdf';
 import { allocate, relocateByWaveOrder } from '../allocator.js';
 import { computeStockAfterMovements } from '../ledger.js';
 import { withConfig, type AllocatorConfig } from '../config.js';
-import { renderBlankPicklistHtml, renderPicklistHtml } from '../adapters/html-output.js';
-import { renderPicklistPdfPage, stampPageNumbers, type PdfPageRange } from '../adapters/pdf-output.js';
+import { renderPicklistPdfPage, stampPageNumbers, generateBlankPicklistPdf, type PdfPageRange } from '../adapters/pdf-output.js';
 import { buildMovementReport } from '../movement.js';
 import { derivePickfaces } from '../pickface.js';
 import { parseLocation } from '../pickpath.js';
@@ -101,6 +101,36 @@ function setStatus(msg: string, kind: 'idle' | 'busy' | 'ok' | 'error'): void {
   el.status.dataset.kind = kind;
 }
 
+// ---- alarm -----------------------------------------------------------------
+
+function triggerAlarm(): void {
+  if (!allocation || !doubles || doubles.total === 0) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'alarm-overlay';
+  document.body.appendChild(overlay);
+  setTimeout(() => overlay.remove(), 2500);
+
+  const binList = doubles.pickDoubles.map(d => d.location).join(', ');
+  const banner = document.createElement('div');
+  banner.className = 'alarm-banner';
+  banner.innerHTML =
+    `<span class="alarm-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="#dc2626" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="7" stroke="#fff" stroke-width="1.5"/></svg></span>DOUBLE PICK DETECTED — ${doubles.total} reserve bin${doubles.total > 1 ? 's' : ''} touched more than once` +
+    `<span class="alarm-stats">${binList}</span>`;
+  document.body.appendChild(banner);
+  setTimeout(() => banner.remove(), 3200);
+
+  document.body.classList.add('alarm-active');
+  setTimeout(() => document.body.classList.remove('alarm-active'), 1500);
+
+  // flash the Double tab button so the picker knows to look there
+  const doubleTabBtn = el.tabs.querySelector('button[data-panel="panel-double"]') as HTMLButtonElement | null;
+  if (doubleTabBtn) {
+    doubleTabBtn.classList.add('tab-flash');
+    setTimeout(() => doubleTabBtn.classList.remove('tab-flash'), 5000);
+  }
+}
+
 // ---- run ------------------------------------------------------------------
 
 el.runBtn.addEventListener('click', () => {
@@ -178,6 +208,8 @@ function renderResults(): void {
 
   const firstTab = el.tabs.querySelector('button');
   if (firstTab) (firstTab as HTMLButtonElement).click();
+
+  triggerAlarm();
 }
 
 function kpi(label: string, value: string, sub: string): string {
@@ -404,13 +436,9 @@ el.downloadAll.addEventListener('click', () => {
 });
 
 el.printBlankBtn.addEventListener('click', () => {
-  const html = renderBlankPicklistHtml();
-  const w = window.open('', '_blank');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  setTimeout(() => w.print(), 400);
+  const [pdf] = generateBlankPicklistPdf();
+  const blob = new Blob([pdf.data], { type: 'application/pdf' });
+  triggerDownload(blob, pdf.name);
 });
 
 function movementCsvText(): string {

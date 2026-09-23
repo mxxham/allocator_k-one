@@ -69,15 +69,17 @@ export interface AllocationLine {
   pickType: PickType;
   upp: number;
   uom: string | null;
-  /** cartons left in the bin after this pick */
-  qtyRemainingInBin: number;
-  /** days of shelf life left at the allocation date */
-  daysToExpiry: number;
-  /** travel-order sequence within its picklist (1-based) */
-  seq: number;
-  /** set when this pick opens a previously untouched full pallet */
-  breaksPallet: boolean;
-}
+   /** cartons left in the bin after this pick */
+   qtyRemainingInBin: number;
+   /** days of shelf life left at the allocation date */
+   daysToExpiry: number;
+   /** travel-order sequence within its picklist (1-based) */
+   seq: number;
+   /** set when this pick opens a previously untouched full pallet */
+   breaksPallet: boolean;
+   /** slot time of the wave this line belongs to — used for execution-order anchoring */
+   slotTime: string | null;
+ }
 
 export interface Shortage {
   shipmentNumber: string;

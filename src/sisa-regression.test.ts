@@ -81,6 +81,7 @@ function makeBin(
 
 function makeDemand(
   shipment: string, wave: string, sku: string, qty: number, upp: number,
+  slotTime: string | null = null,
 ): DemandLine {
   return {
     shipmentNumber: shipment,
@@ -94,7 +95,7 @@ function makeDemand(
     shipToLocation: 'STAGING',
     transport: null,
     truckType: null,
-    slotTime: null,
+    slotTime,
     deliveryDate: null,
   };
 }
@@ -305,7 +306,7 @@ describe('Multiple expiry at same location — independent identities', () => {
 describe('Later pick from same identity — chronological sisa', () => {
   it('wave 1 sisa = 25, wave 2 sisa = 20 (Phase 3 preserved after re-anchor)', () => {
     const config = makeConfig();
-    const stock = [makeBin('CC01B01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
+    const stock = [makeBin('CC01A01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
     const demand = [
       makeDemand('S6a', '1', 'SKU6', 10, 48),
       makeDemand('S6b', '2', 'SKU6', 5, 48),
@@ -329,7 +330,7 @@ describe('Later pick from same identity — chronological sisa', () => {
 describe('No relocation event → stays at source location', () => {
   it('multiple waves at same identity with no break stay at source', () => {
     const config = makeConfig();
-    const stock = [makeBin('CC01B01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
+    const stock = [makeBin('CC01A01', 'SKU6', 'B6', '2030-06-01', 35, 48)];
     const demand = [
       makeDemand('S6a', '1', 'SKU6', 10, 48),
       makeDemand('S6b', '2', 'SKU6', 5, 48),
@@ -339,7 +340,7 @@ describe('No relocation event → stays at source location', () => {
     relocateByWaveOrder(result.lines, pickfaces, config, stock);
 
     const w2 = result.lines.find(l => l.waveNo === '2')!;
-    eq(w2.location, 'CC01B01', 'wave 2 stays at source (no relocation event)');
+    eq(w2.location, 'CC01A01', 'wave 2 stays at source (no relocation event)');
     eq(w2.qtyRemainingInBin, 20, 'wave 2 sisa=20');
     gt(w2.qtyRemainingInBin, 0, 'wave 2 sisa positive');
   });
@@ -887,8 +888,8 @@ describe('Relocation vs no-relocation distinction', () => {
     const resultBreak = allocate(stockBreak, demandBreak, config);
     relocateByWaveOrder(resultBreak.lines, pickfacesBreak, config, stockBreak);
 
-    // Source without break: opened pallet, picks don't break
-    const stockNoBreak = [makeBin('CC30C01', 'SKU-NOCMP', 'B-1', '2030-06-01', 10, 48)];
+    // Source without break: opened pallet, picks don't break (Level A so multi-wave is allowed)
+    const stockNoBreak = [makeBin('CC01A01', 'SKU-NOCMP', 'B-1', '2030-06-01', 10, 48)];
     const demandNoBreak = [
       makeDemand('S-NOCMP1', '1', 'SKU-NOCMP', 5, 48),
       makeDemand('S-NOCMP2', '2', 'SKU-NOCMP', 5, 48),
@@ -897,15 +898,54 @@ describe('Relocation vs no-relocation distinction', () => {
     const resultNoBreak = allocate(stockNoBreak, demandNoBreak, config);
     relocateByWaveOrder(resultNoBreak.lines, pickfacesNoBreak, config, stockNoBreak);
 
-    // Without break: both picks stay at CC30C01 (no relocation event)
+    // Without break: both picks stay at CC01A01 (no relocation event)
     const noBreakLines = resultNoBreak.lines.filter(l => l.sku === 'SKU-NOCMP');
     for (const l of noBreakLines) {
-      eq(l.location, 'CC30C01', 'no-break wave ' + l.waveNo + ' stays at source');
+      eq(l.location, 'CC01A01', 'no-break wave ' + l.waveNo + ' stays at source');
     }
     eq(noBreakLines[0].qtyRemainingInBin, 5, 'no-break wave 1 sisa=5');
     eq(noBreakLines[1].qtyRemainingInBin, 0, 'no-break wave 2 sisa=0');
   });
 });
+
+// ── 29. Slot-time ordering overrides wave number in relocation ──
+
+describe('Slot-time ordering overrides wave number in relocation', () => {
+  it('wave with earlier slot time (but higher wave number) is treated as executed first', () => {
+    const config = withConfig({ asOf: new Date('2026-09-15'), minRemainingShelfLifeDays: 1, nearExpiryWarningDays: 365, sequenceShipmentsBySlot: true });
+    const stock = [makeBin('CC01A01', 'SKU-ST-ORDER', 'B-1', '2030-06-01', 48, 48)];
+    // Wave 7 has slot 04:02 (earlier), wave 5 has slot 04:17 (later)
+    // Both share the same physical bin+SKU+batch+expiry.
+    // Per slot-time ordering, wave 7 (earlier slot) is executed FIRST.
+    const demand = [
+      makeDemand('S-ST7', '7', 'SKU-ST-ORDER', 20, 48, '04:02'),
+      makeDemand('S-ST5', '5', 'SKU-ST-ORDER', 20, 48, '04:17'),
+    ];
+    const pickfaces = derivePickfaces(stock, config);
+    const result = allocate(stock, demand, config);
+    relocateByWaveOrder(result.lines, pickfaces, config, stock);
+
+    const wave7Line = result.lines.find(l => l.waveNo === '7')!;
+    const wave5Line = result.lines.find(l => l.waveNo === '5')!;
+
+    // Both waves must have lines allocated
+    gt(wave7Line.qtyPick, 0, 'wave 7 has picks');
+    gt(wave5Line.qtyPick, 0, 'wave 5 has picks');
+
+    // Wave 7 (earlier slot time 04:02) should be treated as executed first.
+    // This means wave 7 owns the pallet-break/relocation event, and wave 5's
+    // Sisa is computed as if wave 7 already ran.
+    // After wave 7 picks 20 from 48, sisa = 28. After wave 5 picks 20 from remaining 28, sisa = 8.
+    eq(wave7Line.qtyRemainingInBin, 28, 'wave 7 sisa=28 (first to execute)');
+    eq(wave5Line.qtyRemainingInBin, 8, 'wave 5 sisa=8 (sees wave 7 as already executed)');
+
+    // Slot-time ordering means wave 7 runs first regardless of its higher wave number
+    eq(wave7Line.slotTime, '04:02', 'wave 7 slotTime preserved');
+    eq(wave5Line.slotTime, '04:17', 'wave 5 slotTime preserved');
+  });
+});
+
+// ── 11. Reserve-bin single-wave claim (Level B+ cannot be picked by multiple waves) ──
 
 // ── summary ──────────────────────────────────────────────────────────────────
 

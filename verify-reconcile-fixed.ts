@@ -346,7 +346,7 @@ async function main() {
       console.log(detail);
     }
   } else {
-    console.log(`  ✅ PASS: No chronological overdraws`);
+    console.log(`  [PASS] No chronological overdraws`);
   }
   console.log();
 
@@ -384,7 +384,7 @@ async function main() {
       console.log(`      Displayed: ${ledger.finalExpected}`);
     }
   } else {
-    console.log(`  ✅ PASS: No raw negatives`);
+    console.log(`  [PASS] No raw negatives`);
   }
   console.log();
 
@@ -432,7 +432,7 @@ async function main() {
       console.log(detail);
     }
   } else {
-    console.log(`  ✅ PASS: All Sisa values correct`);
+    console.log(`  [PASS] All Sisa values correct`);
   }
   console.log();
 
@@ -517,9 +517,9 @@ async function main() {
             // Verify Sisa
             const expectedSisa = balance - event.qty;
             if (event.line.qtyRemainingInBin !== expectedSisa) {
-              console.log(`        ⚠️  SISA MISMATCH: expected ${expectedSisa}, got ${event.line.qtyRemainingInBin}`);
+              console.log(`        [WARN] SISA MISMATCH: expected ${expectedSisa}, got ${event.line.qtyRemainingInBin}`);
             } else {
-              console.log(`        ✅ Sisa correct`);
+              console.log(`        [PASS] Sisa correct`);
             }
             
             balance -= event.qty;
@@ -566,7 +566,7 @@ async function main() {
       }
     }
   } else {
-    console.log(`  ✅ PASS: No multi-expiry binIds in current workbook`);
+    console.log(`  [PASS] No multi-expiry binIds in current workbook`);
     console.log(`  (Physical identity model correctly includes expiry)`);
   }
   console.log();
@@ -653,11 +653,11 @@ async function main() {
     multiSource: true,  // No conflicts found
   };
   
-  console.log(`  ✅ Sisa mismatches: ${sisaMismatches} ${verdicts.sisaMismatches ? 'PASS' : 'FAIL'}`);
-  console.log(`  ✅ True chronological overdraws: ${trueOverdraws} ${verdicts.chronologicalOverdraws ? 'PASS' : 'FAIL'}`);
-  console.log(`  ✅ Raw negatives: ${rawNegatives.length} ${verdicts.rawNegatives ? 'PASS' : 'FAIL'}`);
-  console.log(`  ✅ Expiry isolation: ${verdicts.expiryIsolation ? 'PASS' : 'FAIL'}`);
-  console.log(`  ✅ Multiple sources → one pickface: ${verdicts.multiSource ? 'PASS' : 'FAIL'}`);
+  console.log(`  [PASS] Sisa mismatches: ${sisaMismatches} ${verdicts.sisaMismatches ? 'PASS' : 'FAIL'}`);
+  console.log(`  [PASS] True chronological overdraws: ${trueOverdraws} ${verdicts.chronologicalOverdraws ? 'PASS' : 'FAIL'}`);
+  console.log(`  [PASS] Raw negatives: ${rawNegatives.length} ${verdicts.rawNegatives ? 'PASS' : 'FAIL'}`);
+  console.log(`  [PASS] Expiry isolation: ${verdicts.expiryIsolation ? 'PASS' : 'FAIL'}`);
+  console.log(`  [PASS] Multiple sources → one pickface: ${verdicts.multiSource ? 'PASS' : 'FAIL'}`);
   console.log();
   console.log(`  Section 7 (Destination-only identities):`);
   console.log(`    Classification: ARCHITECTURAL LIMITATION`);
@@ -669,11 +669,11 @@ async function main() {
   
   if (allPass) {
     console.log(`  ═════════════════════════════════════════`);
-    console.log(`  FINAL VERDICT: ✅ READY FOR DEPLOYMENT`);
+    console.log(`  FINAL VERDICT: [PASS] READY FOR DEPLOYMENT`);
     console.log(`  ═════════════════════════════════════════`);
   } else {
     console.log(`  ═════════════════════════════════════════`);
-    console.log(`  FINAL VERDICT: ❌ NOT READY`);
+    console.log(`  FINAL VERDICT: [FAIL] NOT READY`);
     console.log(`  ═════════════════════════════════════════`);
   }
   console.log();

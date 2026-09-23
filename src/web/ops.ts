@@ -9,6 +9,7 @@
 
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { getBrowserClient, type DbClient } from '../lib/supabase.js';
 import { createRepositories, type Repositories } from '../repository/index.js';
 import { ExecutionService } from '../services/execution.js';
@@ -388,7 +389,7 @@ $('#execTable').addEventListener('click', async (e) => {
   const action = b.dataset.action!;
   if (action === 'wave-complete') {
     const res = await run('Completing wave', () => exec!.completeWave(id, actor()));
-    if (res) setOps(`Wave ${String(res.result)} — ${String(res.posted ?? 0)} movement(s) posted.`, 'ok');
+    if (res) setOps(`Wave ${String(res.result)} — ${String(res.movements_posted ?? res.posted ?? 0)} movement(s) posted.`, 'ok');
     void loadWaves();
   } else if (action === 'wave-reschedule') {
     const reason = window.prompt('Reschedule reason?');
@@ -413,7 +414,9 @@ $('#execTable').addEventListener('click', async (e) => {
     movementsByWave.set(wave.id, movements);
     const picklists = buildPicklistsFromDB([wave], movementsByWave, outboundByWave);
     if (picklists.length === 0) { setOps('No pick movements for this wave.', 'error'); return; }
-    const { stock } = await loadStockFromDatabase(repos.stock);
+    const result = await run('Loading stock', () => loadStockFromDatabase(repos!.stock));
+    if (!result) { setOps('No stock data found.', 'error'); return; }
+    const { stock } = result;
     const pickfaces = derivePickfaces(stock, withConfig({ asOf: new Date(wave.plannedDate ?? today() + 'T00:00:00Z') }));
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
     const ranges: PdfPageRange[] = [];
@@ -425,12 +428,7 @@ $('#execTable').addEventListener('click', async (e) => {
     }
     stampPageNumbers(doc, ranges);
     const blob = doc.output('blob');
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `picklist_${wave.waveNo}.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerDownload(blob, `picklist_${wave.waveNo}.pdf`);
     setOps(`PDF downloaded: picklist_${wave.waveNo}.pdf`, 'ok');
     return;
   } else if (action === 'wave-detail') {

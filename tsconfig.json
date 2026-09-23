@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "declaration": true,
     "lib": [
       "ES2022"
@@ -16,7 +16,8 @@
     ]
   },
   "include": [
-    "src"
+    "src",
+    "tests"
   ],
   "exclude": [
     "src/web"

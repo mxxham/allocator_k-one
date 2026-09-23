@@ -53,7 +53,7 @@ export function parseInboundFromWorkbook(
       continue;
     }
 
-    const qty = asNumber(row['on hand']);
+    const qty = asNumber(row['Remain Qty']);
     if (qty <= 0) continue;
 
     const expiryDate = asDate(row['Expired Date']);

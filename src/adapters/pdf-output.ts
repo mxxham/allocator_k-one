@@ -173,7 +173,7 @@ export function stampPageNumbers(doc: jsPDF, pageRanges?: PdfPageRange[]): void 
 // ── Picklist column widths (A4 landscape content = 268mm) ────────────────────
 
 const PICKLIST_COL_WIDTHS = [10, 30, 22, 50, 26, 20, 20, 14, 20, 12, 10] as const;
-// idx:  0-No  1-Lokasi  2-Material  3-Description  4-DO  5-BinToBin  6-Batch  7-ExpDate  8-QtyPick  9-UOM  10-Sisa  11-✓
+// idx:  0-No  1-Lokasi  2-Material  3-Description  4-DO  5-BinToBin  6-Batch  7-ExpDate  8-QtyPick  9-UOM  10-Sisa
 
 // ── Picklist PDF rendering ──────────────────────────────────────────────────
 
@@ -182,13 +182,13 @@ export function renderPicklistPdfPage(doc: jsPDF, pl: Picklist, pickfaces?: Map<
   const headerH = picklistHeaderHeight(doc, pl, geo);
   const tableStartY = geo.marginTop + headerH;
 
-  const head = [['No', 'Lokasi', 'Material', 'Description', 'Bin To Bin', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '✓']];
+  const head = [['No', 'Lokasi', 'Material', 'Description', 'Bin To Bin', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '']];
   const body: any[][] = [];
   let lastPickType: string | null = null;
   for (const l of pl.lines) {
     if (lastPickType !== l.pickType) {
       const label = l.pickType === 'CASE' ? '— HANDPICK / ECERAN —' : '— FORKLIFT / FULL PALLET —';
-      body.push([{ content: label, colSpan: 11, styles: { fillColor: [230, 230, 230], fontStyle: 'bold', halign: 'center', textColor: [0, 0, 0] } }]);
+      body.push([{ content: label, colSpan: 11, styles: { pageBreak: 'before', fillColor: [230, 230, 230], fontStyle: 'bold', halign: 'center', textColor: [0, 0, 0] } }]);
       lastPickType = l.pickType;
     }
     const pfLoc = pickfaces?.get(l.sku)?.location ?? '';
@@ -319,7 +319,7 @@ export function renderBlankPicklistPdf(
   y += 9;
 
   // ── Table ───────────────────────────────────────────────────────────────
-  const head = [['No', 'Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '✓']];
+  const head = [['No', 'Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp Date', 'Qty Pick', 'UOM', 'Sisa', '']];
   const body: any[][] = [];
   for (let i = 1; i <= rowCount; i++) {
     body.push([String(i), '', '', '', '', '', '', '', '', '', '']);

@@ -16,7 +16,7 @@ export const WMS_COLUMNS = [
   'Batch',
   'Expired Date',
   'GR date',
-  'on hand',
+  'Remain Qty',
   'UPP',
   'uom',
   'status',

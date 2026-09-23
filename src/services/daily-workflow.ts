@@ -266,25 +266,26 @@ export function buildPicklistsFromDB(
       outbound.flatMap((o) => parsePackedDescription(o.description).orderNos),
     )].sort();
 
-    const lines: AllocationLine[] = picks.map((m, idx) => ({
-      shipmentNumber: m.shipmentNumber ?? wave.shipmentNumbers[0] ?? '',
-      waveNo: wave.waveNo,
-      orderNos,
-      sku: m.sku,
-      description: m.description,
-      location: m.sourceLocation,
-      binId: m.sourceLocation,
-      batch: m.batch,
-      expiryDate: m.expiryDate,
-      qtyPick: m.quantity,
-      pickType: (m.pickType ?? 'CASE') as PickType,
-      upp: 1,
-      uom: null,
-      qtyRemainingInBin: 0,
-      daysToExpiry: 0,
-      seq: idx + 1,
-      breaksPallet: m.breaksPallet,
-    }));
+const lines: AllocationLine[] = picks.map((m, idx) => ({
+       shipmentNumber: m.shipmentNumber ?? wave.shipmentNumbers[0] ?? '',
+       waveNo: wave.waveNo,
+       orderNos,
+       sku: m.sku,
+       description: m.description,
+       location: m.sourceLocation,
+       binId: m.sourceLocation,
+       batch: m.batch,
+       expiryDate: m.expiryDate,
+       qtyPick: m.quantity,
+       pickType: (m.pickType ?? 'CASE') as PickType,
+       upp: 1,
+       uom: null,
+       qtyRemainingInBin: 0,
+       daysToExpiry: 0,
+       seq: idx + 1,
+       breaksPallet: m.breaksPallet,
+       slotTime: wave.plannedSlot,
+     }));
 
     const totalCartons = lines.reduce((s, l) => s + l.qtyPick, 0);
     const totalPallets = lines.filter((l) => l.pickType === 'PALLET').length;

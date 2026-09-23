@@ -59,7 +59,7 @@ export async function loadWorkbook(path: string, config: AllocatorConfig): Promi
     const location = asString(row['Lokasi']).toUpperCase();
     if (!location) continue;
 
-    const qty = asNumber(row['on hand']);
+    const qty = asNumber(row['Remain Qty']);
     if (qty <= 0) continue; // empty bin
 
     if (config.stagingLocations.some((x) => location === x.toUpperCase())) {

@@ -23,7 +23,7 @@ export async function writePicklistWorkbook(
   config?: AllocatorConfig,
 ): Promise<void> {
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'FEFO Allocator';
+  wb.creator = 'K-one Allocator';
   wb.created = result.generatedAt;
   const cfg = config ?? withConfig();
 
