@@ -388,14 +388,6 @@ export function relocateByWaveOrder(
     line?: AllocationLine;
   };
 
-  const picksByIdentity = new Map<string, AllocationLine[]>();
-  for (const line of lines) {
-    const key = stockIdentityKey(line.location, line.sku, line.batch, line.expiryDate);
-    const group = picksByIdentity.get(key);
-    if (group) group.push(line);
-    else picksByIdentity.set(key, [line]);
-  }
-
   const relocOutByIdentity = new Map<string, RelocEvent[]>();
   const relocInByIdentity = new Map<string, RelocEvent[]>();
   for (const event of relocationEvents) {

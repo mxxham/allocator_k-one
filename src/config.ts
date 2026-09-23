@@ -91,7 +91,7 @@ export interface AllocatorConfig {
 export const DEFAULT_CONFIG: AllocatorConfig = {
   asOf: new Date(),
 
-  minRemainingShelfLifeDays: 180,
+  minRemainingShelfLifeDays: 0,
   nearExpiryWarningDays: 365,
   warnOnMixedExpiryPerLine: true,
 

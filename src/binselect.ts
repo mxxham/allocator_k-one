@@ -72,9 +72,17 @@ function chooseWithinExpiryGroup(
         const fits = open.filter((l) => l.remaining >= remaining);
         if (fits.length) return fits.sort((a, b) => a.remaining - b.remaining || a.seqKey - b.seqKey)[0];
       }
-      return open.sort((a, b) => b.remaining - a.remaining || a.seqKey - b.seqKey)[0];
+      const largestOpen = open.sort((a, b) => b.remaining - a.remaining || a.seqKey - b.seqKey)[0];
+      if (largestOpen.remaining >= remaining) return largestOpen;
+
+      const sealed = group.filter((l) => !l.opened);
+      if (sealed.length) return sealed.sort((a, b) => b.remaining - a.remaining || a.seqKey - b.seqKey)[0];
+      return largestOpen;
     }
   }
+
+  const sealed = group.filter((l) => !l.opened && l.remaining >= remaining);
+  if (sealed.length) return sealed.sort((a, b) => a.seqKey - b.seqKey)[0];
 
   return group.sort((a, b) => a.seqKey - b.seqKey)[0];
 }
