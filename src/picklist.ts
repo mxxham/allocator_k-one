@@ -5,17 +5,13 @@ import type { AllocationLine, AllocationResult, DemandLine, Picklist, PickType }
 /**
  * Turn raw allocations into printable pick tasks.
  *
- * Grouped by WAVE — the "NO" column on Schedule of the day — not by
- * shipment: several shipments can share one NO (they're run together, e.g.
- * one truck making multiple drops), and that whole run comes out as a single
- * picklist to download, matching how it's actually dispatched on the floor.
- * A wave with only one shipment behaves exactly as before.
+ * Grouped by SHIPMENT — column D ("Shipment Number") on Schedule of the day —
+ * so every shipment is its own picklist, `PL-<shipment number>`. The NO wave
+ * (column R) is kept only as a label: some warehouses run several shipments
+ * together, and the printable header still shows which NO run the shipment
+ * belongs to.
  *
- * Each picklist is named after its shipment number(s) — `PL-<shipment number>`
- * (column D on the schedule), e.g. PL-109682957 — not after the NO wave, so the
- * number on the sheet is the SAP shipment the warehouse checks against.
- *
- *   · one task per wave (optionally split forklift work from handpicks)
+ *   · one picklist per shipment (optionally split forklift work from handpicks)
  *   · lines sorted along the serpentine pick path, not by SKU
  *   · sequence numbers assigned last so they match the walking order
  */
@@ -25,18 +21,20 @@ export function buildPicklists(
   config: AllocatorConfig,
 ): Picklist[] {
   const header = new Map<string, DemandLine>();
-  for (const d of demand) if (!header.has(d.waveNo)) header.set(d.waveNo, d);
-
-  const shipmentsByWave = new Map<string, Set<string>>();
   for (const d of demand) {
-    const set = shipmentsByWave.get(d.waveNo);
-    if (set) set.add(d.shipmentNumber);
-    else shipmentsByWave.set(d.waveNo, new Set([d.shipmentNumber]));
+    const key = d.shipmentNumber || d.waveNo;
+    if (!header.has(key)) header.set(key, d);
+  }
+
+  const waveByShipment = new Map<string, string>();
+  for (const d of demand) {
+    const key = d.shipmentNumber || d.waveNo;
+    if (!waveByShipment.has(key)) waveByShipment.set(key, d.waveNo);
   }
 
   const groups = new Map<string, AllocationLine[]>();
   for (const line of result.lines) {
-    const key = line.waveNo;
+    const key = line.shipmentNumber || line.waveNo;
     const bucket = groups.get(key);
     if (bucket) bucket.push(line);
     else groups.set(key, [line]);
@@ -44,9 +42,10 @@ export function buildPicklists(
 
   const picklists: Picklist[] = [];
 
-  for (const [waveNo, rawLines] of groups) {
-    const h = header.get(waveNo);
-    const shipmentNumbers = [...(shipmentsByWave.get(waveNo) ?? [])].sort();
+  for (const [key, rawLines] of groups) {
+    const h = header.get(key);
+    const waveNo = waveByShipment.get(key) ?? key;
+    const shipmentNumbers = rawLines[0]?.shipmentNumber ? [rawLines[0].shipmentNumber] : [];
 
     const handpick = rawLines
       .filter((l) => l.pickType === 'CASE')
@@ -62,10 +61,9 @@ export function buildPicklists(
       lines.forEach((l, i) => (l.seq = i + 1));
       const suffix = chunks.length > 1 ? `-${idx + 1}` : '';
       const allOrderNos = [...new Set(rawLines.flatMap((l) => l.orderNos))].sort();
-      const picklistKey = shipmentNumbers.length > 0 ? shipmentNumbers.join('-') : waveNo;
 
       picklists.push({
-        picklistId: `PL-${picklistKey}${suffix}`,
+        picklistId: `PL-${key}${suffix}`,
         waveNo,
         shipmentNumbers,
         destination: h?.destination ?? '',
@@ -84,11 +82,11 @@ export function buildPicklists(
     });
   }
 
-  // forklift task before handpick within a wave; waves by slot time, then by NO
   return picklists.sort(
     (a, b) =>
       (a.slotTime ?? '99:99').localeCompare(b.slotTime ?? '99:99') ||
       waveSortKey(a.waveNo) - waveSortKey(b.waveNo) ||
+      a.shipmentNumbers[0]!.localeCompare(b.shipmentNumbers[0]!) ||
       a.taskType.localeCompare(b.taskType),
   );
 }

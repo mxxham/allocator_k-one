@@ -147,6 +147,11 @@ function emptyResult(_bothEmpty: boolean): WorkflowResult {
  *
  * This reverses that encoding so we can reconstruct the original DemandLine.
  */
+function waveSortKey(waveNo: string): number {
+  const n = Number(waveNo);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
 function parsePackedDescription(
   rawDescription: string,
 ): { cleanDescription: string; orderNos: string[]; slotTime: string | null } {
@@ -254,72 +259,92 @@ export function buildPicklistsFromDB(
 
   for (const wave of waves) {
     const movements = movementsByWave.get(wave.id) ?? [];
-    if (movements.length === 0) continue;
-
     const picks = movements
       .filter((m) => m.movementType === 'PICK')
       .sort((a, b) => a.sku.localeCompare(b.sku) || (a.seq ?? 0) - (b.seq ?? 0));
 
-    const pickedSkus = new Set(picks.map((m) => m.sku));
-    const outbound = (outboundByWave.get(wave.id) ?? []).filter((o) => pickedSkus.has(o.sku));
-    const orderNos = [...new Set(
-      outbound.flatMap((o) => parsePackedDescription(o.description).orderNos),
-    )].sort();
+    const picksByShipment = new Map<string, MovementRecord[]>();
+    for (const m of picks) {
+      const shipment = m.shipmentNumber ?? wave.shipmentNumbers[0] ?? '';
+      const bucket = picksByShipment.get(shipment);
+      if (bucket) bucket.push(m);
+      else picksByShipment.set(shipment, [m]);
+    }
 
-const lines: AllocationLine[] = picks.map((m, idx) => ({
-       shipmentNumber: m.shipmentNumber ?? wave.shipmentNumbers[0] ?? '',
-       waveNo: wave.waveNo,
-       orderNos,
-       sku: m.sku,
-       description: m.description,
-       location: m.sourceLocation,
-       binId: m.sourceLocation,
-       batch: m.batch,
-       expiryDate: m.expiryDate,
-       qtyPick: m.quantity,
-       pickType: (m.pickType ?? 'CASE') as PickType,
-       upp: 1,
-       uom: null,
-       qtyRemainingInBin: 0,
-       daysToExpiry: 0,
-       seq: idx + 1,
-       breaksPallet: m.breaksPallet,
-       slotTime: wave.plannedSlot,
-     }));
+    const orderedShipments = [...wave.shipmentNumbers];
+    for (const shipment of picksByShipment.keys()) {
+      if (!orderedShipments.includes(shipment)) orderedShipments.push(shipment);
+    }
 
-    const totalCartons = lines.reduce((s, l) => s + l.qtyPick, 0);
-    const totalPallets = lines.filter((l) => l.pickType === 'PALLET').length;
-    const distinctLocations = new Set(lines.map((l) => l.location)).size;
-    const distinctSkus = new Set(lines.map((l) => l.sku)).size;
+    for (const shipment of orderedShipments) {
+      const shipmentPicks = picksByShipment.get(shipment);
+      if (!shipmentPicks) continue;
 
-    const hasPallet = lines.some((l) => l.pickType === 'PALLET');
-    const hasCase = lines.some((l) => l.pickType === 'CASE');
-    const taskType: Picklist['taskType'] = hasPallet && hasCase ? 'MIXED' : hasPallet ? 'PALLET' : 'CASE';
+      const key = shipment || wave.waveNo;
+      const shipmentNumbers = shipment ? [shipment] : [];
+      const pickedSkus = new Set(shipmentPicks.map((m) => m.sku));
+      const outbound = (outboundByWave.get(wave.id) ?? []).filter(
+        (o) => o.shipmentNumber === shipment && pickedSkus.has(o.sku),
+      );
+      const orderNos = [...new Set(
+        outbound.flatMap((o) => parsePackedDescription(o.description).orderNos),
+      )].sort();
 
-    const picklistKey = wave.shipmentNumbers.length > 0 ? wave.shipmentNumbers.join('-') : wave.waveNo;
+      const lines: AllocationLine[] = shipmentPicks.map((m, idx) => ({
+        shipmentNumber: m.shipmentNumber ?? wave.shipmentNumbers[0] ?? '',
+        waveNo: wave.waveNo,
+        orderNos,
+        sku: m.sku,
+        description: m.description,
+        location: m.sourceLocation,
+        binId: m.sourceLocation,
+        batch: m.batch,
+        expiryDate: m.expiryDate,
+        qtyPick: m.quantity,
+        pickType: (m.pickType ?? 'CASE') as PickType,
+        upp: 1,
+        uom: null,
+        qtyRemainingInBin: 0,
+        daysToExpiry: 0,
+        seq: idx + 1,
+        breaksPallet: m.breaksPallet,
+        slotTime: wave.plannedSlot,
+      }));
 
-    picklists.push({
-      picklistId: `PL-${picklistKey}`,
-      waveNo: wave.waveNo,
-      shipmentNumbers: wave.shipmentNumbers,
-      destination: wave.destination,
-      shipToLocation: wave.destination,
-      transport: wave.truck,
-      truckType: wave.truck,
-      slotTime: wave.plannedSlot,
-      taskType,
-      orderNos,
-      lines,
-      totalCartons,
-      totalPallets,
-      distinctLocations,
-      distinctSkus,
-    });
+      const totalCartons = lines.reduce((s, l) => s + l.qtyPick, 0);
+      const totalPallets = lines.filter((l) => l.pickType === 'PALLET').length;
+      const distinctLocations = new Set(lines.map((l) => l.location)).size;
+      const distinctSkus = new Set(lines.map((l) => l.sku)).size;
+
+      const hasPallet = lines.some((l) => l.pickType === 'PALLET');
+      const hasCase = lines.some((l) => l.pickType === 'CASE');
+      const taskType: Picklist['taskType'] = hasPallet && hasCase ? 'MIXED' : hasPallet ? 'PALLET' : 'CASE';
+
+      picklists.push({
+        picklistId: `PL-${key}`,
+        waveNo: wave.waveNo,
+        shipmentNumbers,
+        destination: wave.destination,
+        shipToLocation: wave.destination,
+        transport: wave.truck,
+        truckType: wave.truck,
+        slotTime: wave.plannedSlot,
+        taskType,
+        orderNos,
+        lines,
+        totalCartons,
+        totalPallets,
+        distinctLocations,
+        distinctSkus,
+      });
+    }
   }
 
   return picklists.sort(
     (a, b) =>
       (a.slotTime ?? '99:99').localeCompare(b.slotTime ?? '99:99') ||
-      a.waveNo.localeCompare(b.waveNo),
+      waveSortKey(a.waveNo) - waveSortKey(b.waveNo) ||
+      a.shipmentNumbers[0]!.localeCompare(b.shipmentNumbers[0]!) ||
+      a.taskType.localeCompare(b.taskType),
   );
 }

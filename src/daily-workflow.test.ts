@@ -388,6 +388,48 @@ describe('Phase 9 — FEFO earliest expiry first', () => {
   });
 });
 
+// ── Phase 10: Shipment-keyed picklists ───────────────────────────────────────
+
+describe('Phase 10 — picklists are generated per shipment, not per NO wave', () => {
+  const stock: StockBin[] = [
+    makeBin('CB02A01', SKU_A, '03I26JJ', '2030-09-03', 72, 48),
+    makeBin('CB02D01', SKU_A, '03I26JJ', '2030-09-03', 48, 48),
+    makeBin('CC36A01', SKU_B, '04I26JJ', '2030-09-04', 44, 44),
+    makeBin('CB05D01', SKU_B, '04I26JJ', '2030-09-04', 64, 44),
+  ];
+  // Two shipments share the SAME NO wave "7" — they must still split into
+  // two picklists because grouping is by shipment number (column D).
+  const demand: DemandLine[] = [
+    makeDemand('SHP-100', '7', SKU_A, 10, 48, '03:17', ['ORD-100']),
+    makeDemand('SHP-200', '7', SKU_B, 10, 44, '03:17', ['ORD-200']),
+  ];
+  const { result, picklists } = runAllocate(stock, demand);
+
+  it('Allocates all 20 cartons, no shortages', () => {
+    eq(result.stats.cartonsAllocated, 20, 'allocated');
+    eq(result.shortages.length, 0, 'shortages');
+  });
+
+  it('2 picklists — one per shipment despite sharing NO wave 7', () => {
+    eq(picklists.length, 2, 'count');
+    for (const p of picklists) eq(p.waveNo, '7', 'wave label');
+  });
+
+  it('Picklist IDs keyed by shipment number', () => {
+    const ids = picklists.map((p) => p.picklistId).sort();
+    eq(ids[0], 'PL-SHP-100', 'first');
+    eq(ids[1], 'PL-SHP-200', 'second');
+  });
+
+  it('Each picklist holds only its own shipment lines', () => {
+    for (const p of picklists) {
+      const shp = p.shipmentNumbers[0];
+      eq(p.lines.every((l) => l.shipmentNumber === shp), true, `${p.picklistId} lines match`);
+      eq(p.lines.some((l) => l.shipmentNumber !== shp), false, `${p.picklistId} no foreign lines`);
+    }
+  });
+});
+
 // ── print results ────────────────────────────────────────────────────────────
 
 console.log('\n' + '─'.repeat(60));
