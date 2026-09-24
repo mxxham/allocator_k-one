@@ -11,6 +11,10 @@ import type { AllocationLine, AllocationResult, DemandLine, Picklist, PickType }
  * picklist to download, matching how it's actually dispatched on the floor.
  * A wave with only one shipment behaves exactly as before.
  *
+ * Each picklist is named after its shipment number(s) — `PL-<shipment number>`
+ * (column D on the schedule), e.g. PL-109682957 — not after the NO wave, so the
+ * number on the sheet is the SAP shipment the warehouse checks against.
+ *
  *   · one task per wave (optionally split forklift work from handpicks)
  *   · lines sorted along the serpentine pick path, not by SKU
  *   · sequence numbers assigned last so they match the walking order
@@ -58,9 +62,10 @@ export function buildPicklists(
       lines.forEach((l, i) => (l.seq = i + 1));
       const suffix = chunks.length > 1 ? `-${idx + 1}` : '';
       const allOrderNos = [...new Set(rawLines.flatMap((l) => l.orderNos))].sort();
+      const picklistKey = shipmentNumbers.length > 0 ? shipmentNumbers.join('-') : waveNo;
 
       picklists.push({
-        picklistId: `PL-${waveNo}${suffix}`,
+        picklistId: `PL-${picklistKey}${suffix}`,
         waveNo,
         shipmentNumbers,
         destination: h?.destination ?? '',

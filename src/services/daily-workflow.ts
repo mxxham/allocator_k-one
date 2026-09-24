@@ -296,8 +296,10 @@ const lines: AllocationLine[] = picks.map((m, idx) => ({
     const hasCase = lines.some((l) => l.pickType === 'CASE');
     const taskType: Picklist['taskType'] = hasPallet && hasCase ? 'MIXED' : hasPallet ? 'PALLET' : 'CASE';
 
+    const picklistKey = wave.shipmentNumbers.length > 0 ? wave.shipmentNumbers.join('-') : wave.waveNo;
+
     picklists.push({
-      picklistId: `PL-${wave.waveNo}`,
+      picklistId: `PL-${picklistKey}`,
       waveNo: wave.waveNo,
       shipmentNumbers: wave.shipmentNumbers,
       destination: wave.destination,
