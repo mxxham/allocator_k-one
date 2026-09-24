@@ -62,7 +62,6 @@ function picklistHeaderHeight(doc: jsPDF, pl: Picklist, geo: PageGeometry): numb
   doc.setFont('helvetica', 'normal');
   const row1Parts = [
     `NO (Wave): ${pl.waveNo}`,
-    `Shipment: ${pl.shipmentNumbers.join(', ')}`,
     `Slot: ${pl.slotTime ?? '-'}`,
     `Truck: ${pl.truckType ?? '-'}`,
     `Total: ${pl.totalCartons} ctn / ${pl.lines.length} stop`,
@@ -96,7 +95,6 @@ function drawPicklistHeader(doc: jsPDF, pl: Picklist, geo: PageGeometry): void {
   doc.setFont('helvetica', 'normal');
   const row1Parts = [
     `NO (Wave): ${pl.waveNo}`,
-    `Shipment: ${pl.shipmentNumbers.join(', ')}`,
     `Slot: ${pl.slotTime ?? '-'}`,
     `Truck: ${pl.truckType ?? '-'}`,
     `Total: ${pl.totalCartons} ctn / ${pl.lines.length} stop`,

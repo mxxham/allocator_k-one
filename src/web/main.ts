@@ -239,7 +239,7 @@ function renderPicklistTab(): void {
     .map(
       (pl) => `<details class="pl-card" open>
       <summary><span class="pl-id">${pl.picklistId}</span>
-        <span class="pl-meta">NO ${pl.waveNo} · ${pl.shipmentNumbers.join(', ')} · ${escapeHtml(pl.destination)} · DO Number: ${pl.orderNos.join(', ')} · ${pl.totalCartons} ctn</span></summary>
+        <span class="pl-meta">NO ${pl.waveNo} · ${escapeHtml(pl.destination)} · DO Number: ${pl.orderNos.join(', ')} · ${pl.totalCartons} ctn</span></summary>
       ${table(
         ['#', 'Lokasi', 'Material', 'Description', 'Ke Lokasi', 'Batch', 'Exp', 'Qty', 'UOM', 'Sisa'],
         pl.lines.map((l) => {

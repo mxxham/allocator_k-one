@@ -66,7 +66,7 @@ function renderPage(pl: Picklist, pickfaces?: Map<string, { location: string }>)
   return `<section class="page">
   <h1>PICKLIST ${pl.picklistId}</h1>
   <div class="meta">
-    <span><b>NO (Wave):</b> ${pl.waveNo} &nbsp; <b>Shipment:</b> ${pl.shipmentNumbers.join(', ')}</span>
+    <span><b>NO (Wave):</b> ${pl.waveNo}</span>
     <span><b>Tujuan:</b> ${escape(pl.destination)} — ${escape(pl.shipToLocation)}</span>
     <span><b>Slot:</b> ${pl.slotTime ?? '-'}</span>
     <span><b>Truck:</b> ${pl.truckType ?? '-'}</span>
